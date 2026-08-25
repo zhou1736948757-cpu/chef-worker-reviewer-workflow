@@ -12,6 +12,8 @@ from pathlib import Path
 WORKLOG_START = "<!-- chef-worker-reviewer-workflow:work-log:start -->"
 WORKLOG_END = "<!-- chef-worker-reviewer-workflow:work-log:end -->"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+VISIBLE_WORKFLOW_DIRNAME = "Workflow"
+LEGACY_WORKFLOW_DIRNAME = ".workflow"
 
 
 def timestamp() -> str:
@@ -67,7 +69,14 @@ def main() -> int:
     if not TASK_ID_PATTERN.fullmatch(args.task_id):
         raise SystemExit("task-id must contain only letters, digits, dot, underscore, or hyphen")
 
-    task_packet = project_root / ".workflow" / "tasks" / f"{args.task_id}.md"
+    workflow_root = project_root / VISIBLE_WORKFLOW_DIRNAME
+    if not workflow_root.is_dir() and (project_root / LEGACY_WORKFLOW_DIRNAME).exists():
+        raise SystemExit(
+            f"Legacy hidden workflow directory detected at {project_root / LEGACY_WORKFLOW_DIRNAME}; "
+            "migrate it with init_project_workflow.py --migrate-legacy first"
+        )
+
+    task_packet = workflow_root / "tasks" / f"{args.task_id}.md"
     if not task_packet.is_file():
         raise SystemExit(f"Task packet not found at {task_packet}; create it before recording an event")
 

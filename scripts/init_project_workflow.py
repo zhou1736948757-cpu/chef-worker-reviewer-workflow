@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,8 @@ MEMORY_RUNTIME_END = "<!-- chef-worker-reviewer-workflow:runtime-config:end -->"
 
 THINKING_DEPTHS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 FILE_POLICIES = ("merge", "overwrite")
+VISIBLE_WORKFLOW_DIRNAME = "Workflow"
+LEGACY_WORKFLOW_DIRNAME = ".workflow"
 CONFIG_ARG_NAMES = (
     "chef_model",
     "worker_model",
@@ -43,15 +46,15 @@ def render(template: str, values: dict[str, str]) -> str:
 
 def validate_runtime_config(config: dict) -> dict:
     if config.get("workflow") != "chef-worker-reviewer-workflow":
-        raise SystemExit(".workflow/config.json has an unexpected workflow name")
+        raise SystemExit("Workflow/config.json has an unexpected workflow name")
 
     models = config.get("models")
     if not isinstance(models, dict):
-        raise SystemExit(".workflow/config.json must contain a models object")
+        raise SystemExit("Workflow/config.json must contain a models object")
     for role in ("chief", "worker", "reviewer"):
         model = models.get(role)
         if not isinstance(model, str) or not model.strip():
-            raise SystemExit(f".workflow/config.json must contain a non-empty {role} model")
+            raise SystemExit(f"Workflow/config.json must contain a non-empty {role} model")
         models[role] = model.strip()
 
     concurrency = config.get("max_worker_concurrency")
@@ -64,14 +67,14 @@ def validate_runtime_config(config: dict) -> dict:
         raise SystemExit(f"thinking_depth must be one of: {choices}")
 
     if not isinstance(config.get("configured_at"), str) or not config["configured_at"].strip():
-        raise SystemExit(".workflow/config.json must contain configured_at")
+        raise SystemExit("Workflow/config.json must contain configured_at")
     return config
 
 
 def build_runtime_config(args: argparse.Namespace, configured_at: str) -> dict:
     config = {
         "workflow": "chef-worker-reviewer-workflow",
-        "version": "1.1",
+        "version": "1.3",
         "configured_at": configured_at,
         "models": {
             "chief": args.chef_model.strip(),
@@ -114,6 +117,71 @@ def resolve_file_policy(root: Path, args: argparse.Namespace) -> str:
             "Ask the user to choose merge or overwrite before rerunning."
         )
     return args.file_policy or "merge"
+
+
+def migrate_managed_paths(root: Path) -> None:
+    for path, start, end in (
+        (root / "AGENTS.md", AGENTS_START, AGENTS_END),
+        (root / "MEMORY.md", MEMORY_START, "<!-- chef-worker-reviewer-workflow:memory:end -->"),
+    ):
+        if not path.is_file():
+            continue
+        existing = path.read_text(encoding="utf-8")
+        start_index = existing.find(start)
+        if start_index < 0:
+            continue
+        end_index = existing.find(end, start_index)
+        if end_index < 0:
+            raise SystemExit(f"Found {start!r} without its closing marker {end!r} in {path}")
+        end_index += len(end)
+        managed = existing[start_index:end_index].replace(".workflow", VISIBLE_WORKFLOW_DIRNAME)
+        updated = existing[:start_index] + managed + existing[end_index:]
+        if updated != existing:
+            path.write_text(updated, encoding="utf-8")
+            print(f"updated legacy workflow paths in managed section of {path}")
+
+    manifest_path = root / VISIBLE_WORKFLOW_DIRNAME / "manifest.json"
+    if not manifest_path.is_file():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        print(f"preserved non-JSON legacy manifest {manifest_path}")
+        return
+    if not isinstance(manifest, dict):
+        print(f"preserved non-object legacy manifest {manifest_path}")
+        return
+    manifest["version"] = "1.3"
+    manifest["artifact_root"] = VISIBLE_WORKFLOW_DIRNAME
+    manifest["runtime_config"] = f"{VISIBLE_WORKFLOW_DIRNAME}/config.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"updated migrated manifest {manifest_path}")
+
+
+def resolve_workflow_root(root: Path, args: argparse.Namespace) -> Path:
+    visible_root = root / VISIBLE_WORKFLOW_DIRNAME
+    legacy_root = root / LEGACY_WORKFLOW_DIRNAME
+    if not legacy_root.exists():
+        return visible_root
+    if visible_root.exists():
+        raise SystemExit(
+            f"Both {visible_root} and legacy {legacy_root} exist. "
+            "Resolve the two workflow directories explicitly before continuing."
+        )
+    if not args.migrate_legacy:
+        raise SystemExit(
+            f"Legacy hidden workflow directory detected at {legacy_root}. "
+            f"Re-run with --migrate-legacy to copy it to visible {visible_root}; "
+            "the legacy directory will be preserved."
+        )
+    if args.dry_run:
+        raise SystemExit("--migrate-legacy cannot be combined with --dry-run")
+    if not legacy_root.is_dir():
+        raise SystemExit(f"Legacy workflow path is not a directory: {legacy_root}")
+    shutil.copytree(legacy_root, visible_root)
+    migrate_managed_paths(root)
+    print(f"migrated legacy {legacy_root} to visible {visible_root}; legacy directory preserved")
+    return visible_root
 
 
 def resolve_runtime_config(workflow_root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
@@ -206,6 +274,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reconfigure", action="store_true")
     parser.add_argument("--file-policy", choices=FILE_POLICIES)
     parser.add_argument("--confirm-overwrite", action="store_true")
+    parser.add_argument("--migrate-legacy", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -217,7 +286,7 @@ def main() -> int:
         raise SystemExit(f"Project root does not exist or is not a directory: {root}")
 
     file_policy = resolve_file_policy(root, args)
-    workflow_root = root / ".workflow"
+    workflow_root = resolve_workflow_root(root, args)
     runtime_config, config_changed = resolve_runtime_config(workflow_root, args)
     initialized_at = runtime_config["configured_at"]
     models = runtime_config["models"]
@@ -284,7 +353,7 @@ def main() -> int:
     else:
         manifest = {
             "workflow": "chef-worker-reviewer-workflow",
-            "version": "1.1",
+            "version": "1.3",
             "project": values["PROJECT_NAME"],
             "initialized_at": initialized_at,
             "role_assignments": {
@@ -292,8 +361,8 @@ def main() -> int:
                 "worker": args.worker,
                 "reviewer": args.reviewer,
             },
-            "artifact_root": ".workflow",
-            "runtime_config": ".workflow/config.json",
+            "artifact_root": VISIBLE_WORKFLOW_DIRNAME,
+            "runtime_config": f"{VISIBLE_WORKFLOW_DIRNAME}/config.json",
         }
         if args.dry_run:
             print(f"DRY-RUN would write {manifest_path}")

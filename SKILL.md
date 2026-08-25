@@ -1,6 +1,6 @@
 ---
 name: chef-worker-reviewer-workflow
-description: Orchestrate a bounded Chief (also called Chef, embodied by the current main conversation) / Worker / Reviewer workflow for project tasks, including first-run model selection, Worker concurrency, and thinking-depth configuration. Use when a task needs multi-agent planning and implementation, independent review, repeatable state tracking, repair and escalation loops, or a project folder should be initialized with durable AGENTS.md, MEMORY.md, and .workflow records.
+description: Orchestrate a bounded Chief (also called Chef, embodied by the current main conversation) / Worker / Reviewer workflow for project tasks, including first-run model selection, Worker concurrency, and thinking-depth configuration. Use when a task needs multi-agent planning and implementation, independent review, repeatable state tracking, repair and escalation loops, or a project folder should be initialized with durable AGENTS.md, MEMORY.md, and visible Workflow records.
 ---
 
 # Chief / Worker / Reviewer Workflow
@@ -33,9 +33,15 @@ Ask the user to choose one policy for all detected unmanaged files:
 
 Do not infer the user's choice from “继续”“可以” or a general approval. Treat anything other than an explicit policy choice and, for overwrite, the explicit confirmation as cancellation. Pass the selected policy to `init_project_workflow.py` with `--file-policy merge` or `--file-policy overwrite --confirm-overwrite`.
 
+## Visible workflow directory
+
+Use a visible, project-root `Workflow/` directory as the canonical artifact root. Do not create a hidden `.workflow/` directory for new projects. Keep `Workflow/` in the normal project tree so users can inspect packets, results, reviews, decisions, the manifest, and runtime configuration directly.
+
+If a legacy project contains `.workflow/` but no `Workflow/`, stop and explain the migration. After explicit approval, run the initializer with `--migrate-legacy`; it copies the legacy directory to `Workflow/` and preserves `.workflow/` as a backup. If both directories exist, do not guess which is authoritative; resolve them explicitly before continuing.
+
 ## First-run setup (mandatory)
 
-Before creating `AGENTS.md`, `MEMORY.md`, or dispatching any task, inspect `.workflow/config.json`.
+Before creating `AGENTS.md`, `MEMORY.md`, or dispatching any task, inspect `Workflow/config.json`.
 
 If it does not exist, ask the user these five questions and wait for answers:
 
@@ -47,12 +53,12 @@ If it does not exist, ask the user these five questions and wait for answers:
 
 Give role-oriented guidance while asking: choose the strongest planning model for Chief, a fast tool-capable model for Worker, and an independent model for Reviewer. Do not silently invent a model, concurrency limit, or thinking depth. If the harness exposes a model or reasoning catalog, validate the answers against it; otherwise preserve the exact user-provided identifiers and report that runtime support still needs verification.
 
-Persist the answers in `.workflow/config.json` using this shape:
+Persist the answers in `Workflow/config.json` using this shape:
 
 ```json
 {
   "workflow": "chef-worker-reviewer-workflow",
-  "version": "1.1",
+  "version": "1.3",
   "configured_at": "<timestamp>",
   "models": {
     "chief": "<model-id>",
@@ -74,9 +80,26 @@ At the beginning of every task, before creating the task packet or dispatching a
 
 > 提醒：本工作流中的 Chef 是当前主对话模型，负责规划、分工、决策和最终协调；Worker 负责执行，Reviewer 负责独立审核。
 
-Include the configured Chef model from `.workflow/config.json`. If the harness exposes the actual current main-conversation model, include it and say whether it matches the configuration. If the harness cannot expose actual routing, state that the configured Chef model is the declared identity and that upstream routing is not independently verified. Never present a local configuration value as proof of the final upstream model.
+Include the configured Chef model from `Workflow/config.json`. If the harness exposes the actual current main-conversation model, include it and say whether it matches the configuration. If the harness cannot expose actual routing, state that the configured Chef model is the declared identity and that upstream routing is not independently verified. Never present a local configuration value as proof of the final upstream model.
 
 If the observable current main-conversation model differs from the configured Chef model, pause before dispatching and ask the user whether to switch the main conversation model or explicitly reconfigure the workflow. Do not silently run a different Chef model.
+
+## Concurrency and quality gate
+
+Worker and Reviewer subagents may run concurrently, but concurrency is an optimization decided by Chef, not an automatic requirement. The configured `max_worker_concurrency` is a hard ceiling for Workers; Chef separately chooses the effective Worker and Reviewer parallelism for each task and records the decision in the task packet.
+
+Chef may authorize parallel execution only when all of these conditions hold:
+
+- each subtask has a separate objective, acceptance criteria, and bounded writable scope;
+- Workers do not edit the same files, shared generated outputs, schema, migration, lockfile, or other mutable state;
+- there is no ordering or data dependency between subtasks, or the dependency has already been materialized as a read-only input;
+- tests can run in isolated environments without shared ports, databases, fixtures, credentials, devices, or rate limits;
+- each Reviewer receives the original task packet, the relevant actual diff, and enough independent evidence to reach a verdict without relying on another Reviewer’s conclusion;
+- the aggregate risk, tool capacity, and observability are acceptable for the selected parallelism.
+
+Default to serial execution when the codebase, dependencies, test isolation, or risk is unclear. Also serialize work involving security, data loss, public release, destructive operations, shared architecture decisions, or tightly coupled integration behavior unless Chef has documented why parallelism remains safe. Multiple Reviewers may review one change concurrently only when their review dimensions are explicitly separated; Chef must synthesize their verdicts and findings before allowing repair or completion. A Reviewer never edits implementation files to make parallel review succeed.
+
+Before dispatch, Chef records at least: planned Worker concurrency, planned Reviewer concurrency, isolation boundaries, dependency assumptions, test-isolation plan, and the reason the choice is expected not to reduce quality. If a parallel result conflicts, loses evidence, creates a merge ambiguity, or exposes an untested interaction, Chef stops further parallel dispatch and returns the affected work to a bounded serial phase.
 
 ## Start a workflow
 
@@ -98,14 +121,14 @@ If the observable current main-conversation model differs from the configured Ch
      --thinking-depth <supported-depth>
    ```
 
-   The script writes `.workflow/config.json`, creates or updates only the managed workflow section of `AGENTS.md`, creates `MEMORY.md` when absent, preserves existing user content, and creates `.workflow/` packet directories. On a later run, omit the configuration flags to reuse the saved configuration; pass `--reconfigure` together with all five flags only after explicit user approval. It never replaces an existing project memory file wholesale.
+   The script writes `Workflow/config.json`, creates or updates only the managed workflow section of `AGENTS.md`, creates `MEMORY.md` when absent, preserves existing user content, and creates visible `Workflow/` packet directories. On a later run, omit the configuration flags to reuse the saved configuration; pass `--reconfigure` together with all five flags only after explicit user approval. It never replaces an existing project memory file wholesale.
 
 5. Emit the Chef task-start reminder above, including configured-versus-observed model status.
-6. Create a task packet at `.workflow/tasks/<task-id>.md` before implementation. Include the objective, scope, exclusions, acceptance criteria, test commands, constraints, dependencies, risks, and deliverables.
-7. Dispatch one Worker per bounded task. Allow parallel Workers only when their file and dependency scopes do not overlap, and never exceed `max_worker_concurrency` from `.workflow/config.json`.
-8. Require the Worker to write a result at `.workflow/results/<task-id>.md` containing changed files, commands run, results, evidence pointers, deviations, and unresolved questions.
-9. Send the original task packet, the actual diff, and the Worker result to a fresh Reviewer context. Require a report at `.workflow/reviews/<task-id>-r<N>.md`.
-10. On `PASS`, update `MEMORY.md` and close the task. On `FAIL`, create a bounded repair task and run the Worker–Reviewer loop again. On `BLOCKED`, or after three repairs with the same root cause, stop and make a Chief decision in `.workflow/decisions/`.
+6. Create a task packet at `Workflow/tasks/<task-id>.md` before implementation. Include the objective, scope, exclusions, acceptance criteria, test commands, constraints, dependencies, risks, and deliverables.
+7. Decide and record effective Worker and Reviewer concurrency using the quality gate above. Dispatch one Worker per bounded task; allow parallel Workers only when Chef confirms the isolation and evidence conditions, and never exceed `max_worker_concurrency` from `Workflow/config.json`.
+8. Require the Worker to write a result at `Workflow/results/<task-id>.md` containing changed files, commands run, results, evidence pointers, deviations, and unresolved questions.
+9. Send the original task packet, the actual diff, and the Worker result to a fresh Reviewer context. Require a report at `Workflow/reviews/<task-id>-r<N>.md`.
+10. On `PASS`, update `MEMORY.md` and close the task. On `FAIL`, create a bounded repair task and run the Worker–Reviewer loop again. On `BLOCKED`, or after three repairs with the same root cause, stop and make a Chief decision in `Workflow/decisions/`.
 
 If the harness cannot create subagents, simulate the same separation in distinct phases and still persist the task, result, and review artifacts.
 
@@ -184,9 +207,9 @@ Never solve a review loop by weakening the acceptance criteria without a recorde
 Keep policy and state separate:
 
 - `AGENTS.md` is the durable rulebook: role boundaries, workflow protocol, evidence rules, artifact paths, and safety constraints.
-- `.workflow/config.json` is the runtime configuration: declared main-conversation Chef model, Worker and Reviewer models, Worker concurrency limit, thinking depth, and configuration timestamp.
+- `Workflow/config.json` is the runtime configuration: declared main-conversation Chef model, Worker and Reviewer models, Worker concurrency limit, thinking depth, and configuration timestamp.
 - `MEMORY.md` is the durable ledger: role assignments, runtime configuration summary, current state, task history, decisions, work log, review findings, risks, and follow-ups.
-- `.workflow/` contains detailed packets and reports so `MEMORY.md` stays concise and traceable.
+- `Workflow/` contains detailed packets and reports so `MEMORY.md` stays concise and traceable.
 
 Read [references/file-contract.md](references/file-contract.md) when deciding what belongs in either file. Use [references/AGENTS.template.md](references/AGENTS.template.md) and [references/MEMORY.template.md](references/MEMORY.template.md) when adapting the contract manually.
 
@@ -199,7 +222,7 @@ python3 <skill-root>/scripts/record_workflow_event.py \
   --role Worker \
   --action "Implemented the bounded change" \
   --result "Targeted tests passed" \
-  --evidence ".workflow/results/<task-id>.md" \
+  --evidence "Workflow/results/<task-id>.md" \
   --next-action "Reviewer to inspect the diff"
 ```
 

@@ -1,10 +1,10 @@
 <!-- chef-worker-reviewer-workflow:memory:start -->
 ## Workflow memory
 
-- Workflow version: `1.1`
+- Workflow version: `1.3`
 - Project: `{{PROJECT_NAME}}`
 - Initialized at: `{{INITIALIZED_AT}}`
-- Artifact root: `.workflow/`
+- Artifact root: `Workflow/`
 - Source contract: `AGENTS.md`
 
 ### Runtime configuration
@@ -16,7 +16,7 @@
 - Reviewer model: `{{REVIEWER_MODEL}}`
 - Worker maximum concurrency: `{{MAX_WORKER_CONCURRENCY}}`
 - Default thinking depth: `{{THINKING_DEPTH}}`
-- Configuration file: `.workflow/config.json`
+- Configuration file: `Workflow/config.json`
 
 <!-- chef-worker-reviewer-workflow:runtime-config:end -->
 
@@ -40,7 +40,7 @@
 
 | Task ID | Objective | Owner | Status | Review | Evidence |
 |---|---|---|---|---|---|
-| `T-000` | Initialize workflow contract | Chief | `PASSED` | `N/A` | `AGENTS.md`, `.workflow/config.json`, `.workflow/manifest.json` |
+| `T-000` | Initialize workflow contract | Chief | `PASSED` | `N/A` | `AGENTS.md`, `Workflow/config.json`, `Workflow/manifest.json` |
 
 ### Decisions
 
@@ -59,7 +59,7 @@ No review findings recorded yet.
 ### Risks and follow-ups
 
 - Confirm project-specific test commands before dispatching the first Worker task.
-- Keep detailed task, result, and review evidence in `.workflow/` and link to it here.
+- Keep detailed task, result, and review evidence in `Workflow/` and link to it here.
 
 ### Update rules
 

@@ -5,10 +5,10 @@ The workflow uses two root-level Markdown files for different kinds of truth.
 | File | Purpose | Primary owner | Update style |
 |---|---|---|---|
 | `AGENTS.md` | Rules that future agents must follow | Chief plus project maintainers | Stable, reviewed policy |
-| `.workflow/config.json` | Runtime model and scheduling configuration | Chief plus user | Replace only through explicit reconfiguration |
+| `Workflow/config.json` | Runtime model and scheduling configuration | Chief plus user | Replace only through explicit reconfiguration |
 | `MEMORY.md` | What this workflow has learned or done | Chief maintains state; Worker and Reviewer append evidence | Append-oriented ledger |
 
-Do not use `MEMORY.md` to hide a new rule. Put a rule in `AGENTS.md` and record the decision that introduced it in `MEMORY.md`. Do not put the active model selection only in prose; `.workflow/config.json` is the source of truth.
+Do not use `MEMORY.md` to hide a new rule. Put a rule in `AGENTS.md` and record the decision that introduced it in `MEMORY.md`. Do not put the active model selection only in prose; `Workflow/config.json` is the source of truth.
 
 ## Pre-generation conflict check
 
@@ -41,7 +41,7 @@ The configuration file should contain:
 ```json
 {
   "workflow": "chef-worker-reviewer-workflow",
-  "version": "1.1",
+  "version": "1.3",
   "configured_at": "<timestamp>",
   "models": {
     "chief": "<model-id>",
@@ -65,9 +65,10 @@ Keep the managed section short and operational. It should contain:
 4. Task lifecycle and allowed transitions.
 5. Definition of evidence and review verdicts.
 6. Repair and escalation thresholds.
-7. Durable artifact paths, including `.workflow/tasks/`, `.workflow/results/`, `.workflow/reviews/`, and `.workflow/decisions/`.
+7. Durable artifact paths, including `Workflow/tasks/`, `Workflow/results/`, `Workflow/reviews/`, and `Workflow/decisions/`.
 8. Runtime configuration rules, including the concurrency ceiling and no-silent-fallback rule.
-9. Privacy and safety rules, especially the prohibition on secrets in Markdown records.
+9. Concurrency quality gate: Chef decides effective Worker and Reviewer parallelism and records isolation, dependencies, test isolation, and the quality rationale per task.
+10. Privacy and safety rules, especially the prohibition on secrets in Markdown records.
 
 Do not put volatile task status, current model names, or long work logs in `AGENTS.md`. Those belong in `MEMORY.md` or the packet files.
 
@@ -96,7 +97,7 @@ Keep the memory file concise and link detailed evidence instead of copying it. I
 
 ### Runtime configuration
 
-Record the declared current main-conversation Chef model, the Worker and Reviewer models, the Worker concurrency ceiling, thinking depth, and a pointer to `.workflow/config.json`. Keep this section synchronized with the config file after an approved reconfiguration. The declared Chef model is not by itself proof of final upstream routing.
+Record the declared current main-conversation Chef model, the Worker and Reviewer models, the Worker concurrency ceiling, thinking depth, and a pointer to `Workflow/config.json`. Keep this section synchronized with the config file after an approved reconfiguration. The declared Chef model is not by itself proof of final upstream routing.
 
 ### Role assignments
 
@@ -118,7 +119,7 @@ Use one row per task:
 
 | Task ID | Objective | Owner | Status | Review | Evidence |
 |---|---|---|---|---|---|
-| T-001 | ... | Worker | EXECUTING | pending | `.workflow/tasks/T-001.md` |
+| T-001 | ... | Worker | EXECUTING | pending | `Workflow/tasks/T-001.md` |
 
 ### Decisions
 
@@ -126,7 +127,7 @@ For each non-trivial decision, record date, decision, rationale, authority, and 
 
 ### Work log
 
-Record short events with timestamp, task, role, action, result, evidence pointer, and next action. Keep detailed output in `.workflow/`.
+Record short events with timestamp, task, role, action, result, evidence pointer, and next action. Keep detailed output in `Workflow/`.
 
 ### Review findings
 
@@ -141,7 +142,7 @@ Record unresolved compatibility, security, data, performance, or release risks w
 | Artifact | Chief | Worker | Reviewer |
 |---|---:|---:|---:|
 | `AGENTS.md` policy | approve/write | propose | flag conflict |
-| `.workflow/config.json` | approve/write | read | read |
+| `Workflow/config.json` | approve/write | read | read |
 | `MEMORY.md` state | maintain | append evidence | append review evidence |
 | Task packet | write/approve | read | read |
 | Implementation | approve scope | write | read |
