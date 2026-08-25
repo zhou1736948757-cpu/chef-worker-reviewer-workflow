@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chief Worker Reviewer Workflow"
+  short_description: "Run bounded work with durable project records"
+  default_prompt: "Use $chef-worker-reviewer-workflow to configure the main-conversation Chef, Worker, and Reviewer models plus concurrency and thinking depth on first use, then plan, implement, review, and record this project task."
