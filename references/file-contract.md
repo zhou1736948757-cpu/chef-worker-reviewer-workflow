@@ -8,11 +8,14 @@ The workflow is an LLM Conductor with deterministic guardrails. Main owns runtim
 |---|---|---|---|
 | `AGENTS.md` | Stable rules and role boundaries | Chief plus maintainers | Managed block only |
 | `MEMORY.md` | Durable project knowledge and confirmed decisions | Main gates; Chief proposes | Concise, append-oriented |
-| `Workflow/config.json` | Declared role models, Worker ceiling, thinking depth | User/Chief | Explicit reconfiguration |
+| `Workflow/config.json` | Declared role models, Worker ceiling, and per-role thinking depths | User/Chief | Explicit reconfiguration |
 | `Workflow/PLAN.md` | Semantic plan, requirements, decisions, invariants, dependencies | Chief | Plan-level updates only |
 | `Workflow/MAIN_BRIEF.md` | Short Chief → Main Runtime Handoff | Chief | Replace/update on plan delta |
 | `Workflow/STATE.json` | Current operational projection | Main/script | Small structured updates |
 | `Workflow/events.jsonl` | Append-only runtime facts | Main/script | One JSON object per line |
+| `Workflow/watchdog.json` | Visible Watchdog settings, PID, last check, and open-alert projection | Main/Watchdog | Updated every check |
+| `Workflow/heartbeats.json` | Latest heartbeat for Main and delegated roles | Main/roles/script | Updated before/after long calls and runtime events |
+| `Workflow/watchdog-alerts.jsonl` | Append-only suspected-stall reports for Main | Watchdog | One JSON object per alert |
 
 `PLAN.md` records semantic dependencies, never runtime concurrency. `STATE.json` answers “where are we now?”; `MEMORY.md` answers “what remains valuable later?”; events answer “what happened during execution?”.
 
@@ -22,7 +25,9 @@ Before writing root files, detect `AGENTS.md` and `MEMORY.md`: absent means crea
 
 `Workflow/` is the canonical visible directory. A legacy `.workflow/` is never silently duplicated. With explicit `--migrate-legacy`, copy it to `Workflow/`, preserve the old directory as backup, update managed path references, and create missing v1.4 artifacts. Existing v1.3 config, tasks, results, reviews, and history remain readable.
 
-The v1.4 config may contain `models.main`. Older configs without it are valid and mean `current-main-conversation`; do not pretend that a local declaration proves upstream routing. A v1.3 invocation with the original five runtime flags remains accepted.
+The Watchdog checks every 600 seconds by default. It reports stale role heartbeats or active-task runtime updates as a suspected network/provider/unresponsive-agent stall; it does not assert the cause, restart agents, change models, or schedule repairs. Main owns the response. No hidden workflow directory is created.
+
+The v1.4 config may contain `models.main` and stores `thinking_depth` as four role keys: `main`, `chief`, `worker`, and `reviewer`. Older configs without `models.main` are valid and mean `current-main-conversation`; a legacy single depth is expanded to all four roles. Do not pretend that a local declaration proves upstream routing. A v1.3 invocation with the original five runtime flags remains accepted.
 
 ## PLAN.md
 
@@ -71,6 +76,8 @@ The initializer creates a small state object:
 ```
 
 Only formal Reviewer `FAIL` increments `worker_failures`. FAIL #1 sets Chief escalation required. FAIL #2 routes to a fresh Expert Worker by default, unless explicit plan-level evidence requires Chief; Expert Worker FAIL routes to Chief through Main. Worker self-repair, tool errors, path errors, temporary timeouts, and intermediate test failures do not. Main may update state for runtime conditions; it must not change semantic task dependencies without Chief.
+
+`active_agent_jobs` is optional/reserved metadata and is not the authoritative source for liveness or completion. Task status, `latest_runtime_update`, `heartbeats.json`, and Watchdog alerts are the operational evidence.
 
 ## Runtime events
 

@@ -52,12 +52,16 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 - `Workflow/reviews/` — Reviewer reports
 - `Workflow/review-bundles/<task-id>/<attempt>/` — immutable bundle-first Reviewer inputs
 - `Workflow/decisions/` — Chief Decision Deltas and escalations
-- `Workflow/config.json` — declared role models, Worker concurrency ceiling, and thinking depth
+- `Workflow/config.json` — declared role models, Worker concurrency ceiling, and per-role thinking depths
+- `Workflow/watchdog.json` — visible Watchdog settings and last-check projection
+- `Workflow/heartbeats.json` — latest visible heartbeat for Main and delegated roles
+- `Workflow/watchdog-alerts.jsonl` — append-only suspected-stall reports for Main
 
 ### Runtime and evidence rules
 
 - Read `Workflow/config.json`, `Workflow/STATE.json`, and the relevant plan/brief before dispatch.
 - Use `Workflow/events.jsonl` for `task_started`, dispatch, completion, review, repair, and state events. `MEMORY.md` stores durable knowledge only; Worker/Reviewer submit Memory candidates and Main gates their merge.
+- Start the visible Watchdog before dispatching roles; it checks every 600 seconds by default and reports stale heartbeat/runtime evidence to Main as a suspected network/provider/unresponsive-agent stall. Main decides the response; Watchdog never restarts agents, changes models, or bypasses Main.
 - `exit_code == 0` with `executed_tests == 0` is `INVALID_TEST_EXECUTION`, never a valid test `PASS`.
 - Reviewer `FAIL` reports must include Findings, Evidence, Likely Root Cause, Recommended Solution, Affected Scope, Regression Risks, and Confidence. A recommendation is not repair or architecture authorization.
 - Review Bundles are starting context, not an information boundary. Reviewer may inspect additional files and run targeted checks. Changed input hashes or unstable evidence require a new bundle/review attempt.
@@ -66,6 +70,7 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 
 - Preserve project-specific content outside managed markers. Before initializing an unmarked `AGENTS.md` or `MEMORY.md`, ask for merge, explicit overwrite, or cancel; never infer overwrite permission.
 - Keep canonical artifacts in visible `Workflow/`. Migrate legacy `.workflow/` only with explicit approval and preserve the legacy directory as a backup.
+- Never create `.workflow/` or another hidden workflow directory for a new project.
 - v1.3 configuration and history remain readable; missing v1.4 artifacts are created only when absent. Do not delete history or overwrite unmanaged files.
 - Never store secrets, tokens, private keys, passwords, or sensitive personal data in project Markdown or Workflow artifacts.
 <!-- chef-worker-reviewer-workflow:end -->

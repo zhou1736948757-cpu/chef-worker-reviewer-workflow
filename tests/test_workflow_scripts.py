@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,9 @@ class WorkflowScriptTests(unittest.TestCase):
             "--main-model", "current-main-conversation",
             "--chief", "chief-owner", "--worker", "worker-owner", "--reviewer", "reviewer-owner",
             "--chief-model", "chief-model", "--worker-model", "worker-model", "--reviewer-model", "reviewer-model",
-            "--max-worker-concurrency", "2", "--thinking-depth", "high",
+            "--max-worker-concurrency", "2",
+            "--main-thinking-depth", "medium", "--chief-thinking-depth", "high",
+            "--worker-thinking-depth", "medium", "--reviewer-thinking-depth", "high",
         )
 
     def write_task(self, task_id: str = "T-001", scope: str = "src/a.py", dependencies: str = "None") -> None:
@@ -85,6 +88,30 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertFalse((self.project / ".workflow").exists())
         self.assertEqual(json.loads((self.project / "Workflow" / "config.json").read_text())["version"], "1.4")
 
+    def test_per_role_thinking_depths_are_persisted_and_rendered(self) -> None:
+        self.initialize()
+        config = json.loads((self.project / "Workflow" / "config.json").read_text())
+        self.assertEqual(
+            config["thinking_depth"],
+            {"main": "medium", "chief": "high", "worker": "medium", "reviewer": "high"},
+        )
+        memory = (self.project / "MEMORY.md").read_text(encoding="utf-8")
+        self.assertIn("Main thinking depth: `medium`", memory)
+        self.assertIn("Chief thinking depth: `high`", memory)
+        self.assertIn("Worker thinking depth: `medium`", memory)
+        self.assertIn("Reviewer thinking depth: `high`", memory)
+
+    def test_partial_per_role_thinking_depth_configuration_is_rejected(self) -> None:
+        result = self.run_script(
+            "init_project_workflow.py",
+            "--project-root", str(self.project),
+            "--main-model", "current-main-conversation",
+            "--chief-model", "chief-model", "--worker-model", "worker-model", "--reviewer-model", "reviewer-model",
+            "--max-worker-concurrency", "1", "--chief-thinking-depth", "high", check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Provide thinking depth for Main, Chief, Worker, and Reviewer together", result.stderr)
+
     def test_initial_main_brief_has_final_failure_policy(self) -> None:
         self.initialize()
         brief = (self.project / "Workflow" / "MAIN_BRIEF.md").read_text(encoding="utf-8")
@@ -99,9 +126,51 @@ class WorkflowScriptTests(unittest.TestCase):
         config = json.loads(config_path.read_text())
         config["version"] = "1.3"
         config["models"].pop("main")
+        config["thinking_depth"] = "high"
         config_path.write_text(json.dumps(config), encoding="utf-8")
         result = self.run_script("init_project_workflow.py", "--project-root", str(self.project))
         self.assertEqual(result.returncode, 0)
+        memory = (self.project / "MEMORY.md").read_text(encoding="utf-8")
+        self.assertIn("Main thinking depth: `high`", memory)
+        self.assertIn("Reviewer thinking depth: `high`", memory)
+
+    def test_visible_watchdog_start_creates_records_and_no_hidden_directory(self) -> None:
+        self.initialize()
+        started = self.run_script(
+            "watchdog.py", "--project-root", str(self.project), "--start", "--background",
+            "--interval-seconds", "600", "--stale-after-seconds", "600",
+        )
+        self.assertIn("started visible Workflow Watchdog", started.stdout)
+        workflow = self.project / "Workflow"
+        watchdog = json.loads((workflow / "watchdog.json").read_text())
+        self.assertTrue(watchdog["enabled"])
+        self.assertEqual(watchdog["interval_seconds"], 600)
+        self.assertTrue((workflow / "heartbeats.json").is_file())
+        self.assertFalse((self.project / ".workflow").exists())
+        pid = watchdog["pid"]
+        self.assertIsInstance(pid, int)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    def test_watchdog_reports_stale_task_to_main(self) -> None:
+        self.initialize()
+        self.write_task()
+        self.record_event("T-001", "task_started", role="Main", action="start", result="executing")
+        state_path = self.project / "Workflow" / "STATE.json"
+        state = json.loads(state_path.read_text())
+        state["tasks"]["T-001"].update({"status": "EXECUTING", "latest_runtime_update": "2000-01-01T00:00:00+00:00"})
+        state["latest_runtime_update"] = "2000-01-01T00:00:00+00:00"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        checked = self.run_script(
+            "watchdog.py", "--project-root", str(self.project), "--once", "--stale-after-seconds", "1", check=False,
+        )
+        self.assertEqual(checked.returncode, 1)
+        self.assertIn("possible network, provider, or unresponsive-agent stall", checked.stdout)
+        alerts = self.project / "Workflow" / "watchdog-alerts.jsonl"
+        self.assertTrue(alerts.is_file())
+        self.assertIn('"event_type": "watchdog_alert"', (self.project / "Workflow" / "events.jsonl").read_text())
 
     def test_formal_review_fail_only_increments_worker_failures(self) -> None:
         self.initialize()

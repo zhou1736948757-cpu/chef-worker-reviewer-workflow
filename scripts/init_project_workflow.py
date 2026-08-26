@@ -31,7 +31,12 @@ CONFIG_ARG_NAMES = (
     "worker_model",
     "reviewer_model",
     "max_worker_concurrency",
-    "thinking_depth",
+)
+THINKING_DEPTH_ARG_NAMES = (
+    "main_thinking_depth",
+    "chief_thinking_depth",
+    "worker_thinking_depth",
+    "reviewer_thinking_depth",
 )
 
 
@@ -69,9 +74,19 @@ def validate_runtime_config(config: dict) -> dict:
         raise SystemExit("max_worker_concurrency must be a positive integer")
 
     thinking_depth = config.get("thinking_depth")
-    if thinking_depth not in THINKING_DEPTHS:
-        choices = ", ".join(THINKING_DEPTHS)
-        raise SystemExit(f"thinking_depth must be one of: {choices}")
+    if isinstance(thinking_depth, str):
+        if thinking_depth not in THINKING_DEPTHS:
+            choices = ", ".join(THINKING_DEPTHS)
+            raise SystemExit(f"thinking_depth must be one of: {choices}")
+        config["thinking_depth"] = {role: thinking_depth for role in ("main", "chief", "worker", "reviewer")}
+    elif isinstance(thinking_depth, dict):
+        for role in ("main", "chief", "worker", "reviewer"):
+            depth = thinking_depth.get(role)
+            if depth not in THINKING_DEPTHS:
+                choices = ", ".join(THINKING_DEPTHS)
+                raise SystemExit(f"thinking_depth.{role} must be one of: {choices}")
+    else:
+        raise SystemExit("Workflow/config.json must contain thinking_depth as a string or per-role object")
 
     if not isinstance(config.get("configured_at"), str) or not config["configured_at"].strip():
         raise SystemExit("Workflow/config.json must contain configured_at")
@@ -79,6 +94,7 @@ def validate_runtime_config(config: dict) -> dict:
 
 
 def build_runtime_config(args: argparse.Namespace, configured_at: str) -> dict:
+    thinking_depth = resolve_thinking_depths(args)
     config = {
         "workflow": "chef-worker-reviewer-workflow",
         "version": WORKFLOW_VERSION,
@@ -90,9 +106,23 @@ def build_runtime_config(args: argparse.Namespace, configured_at: str) -> dict:
             "reviewer": args.reviewer_model.strip(),
         },
         "max_worker_concurrency": args.max_worker_concurrency,
-        "thinking_depth": args.thinking_depth,
+        "thinking_depth": thinking_depth,
     }
     return validate_runtime_config(config)
+
+
+def resolve_thinking_depths(args: argparse.Namespace) -> dict[str, str]:
+    role_depths = {role: getattr(args, f"{role}_thinking_depth") for role in ("main", "chief", "worker", "reviewer")}
+    supplied = [value is not None for value in role_depths.values()]
+    if any(supplied):
+        if not all(supplied):
+            raise SystemExit("Provide thinking depth for Main, Chief, Worker, and Reviewer together")
+        if args.thinking_depth is not None:
+            raise SystemExit("Use either --thinking-depth (legacy common depth) or the four per-role thinking-depth flags")
+        return role_depths
+    if args.thinking_depth is None:
+        raise SystemExit("Provide thinking depth for Main, Chief, Worker, and Reviewer")
+    return {role: args.thinking_depth for role in ("main", "chief", "worker", "reviewer")}
 
 
 def load_runtime_config(path: Path) -> dict:
@@ -186,7 +216,9 @@ def resolve_workflow_root(root: Path, args: argparse.Namespace) -> Path:
         raise SystemExit("--migrate-legacy cannot be combined with --dry-run")
     if not legacy_root.is_dir():
         raise SystemExit(f"Legacy workflow path is not a directory: {legacy_root}")
-    staging_parent = Path(tempfile.mkdtemp(prefix=".Workflow-migration-", dir=str(root)))
+    # Keep even the short-lived migration staging directory visible; a new
+    # project must never acquire a hidden workflow directory as an artifact.
+    staging_parent = Path(tempfile.mkdtemp(prefix="Workflow-migration-", dir=str(root)))
     try:
         staged_root = staging_parent / VISIBLE_WORKFLOW_DIRNAME
         shutil.copytree(legacy_root, staged_root)
@@ -204,26 +236,29 @@ def resolve_runtime_config(workflow_root: Path, args: argparse.Namespace) -> tup
     config_path = workflow_root / "config.json"
     supplied = [getattr(args, name) is not None for name in CONFIG_ARG_NAMES]
     supplied_count = sum(supplied)
+    depth_supplied = args.thinking_depth is not None or any(
+        getattr(args, name) is not None for name in THINKING_DEPTH_ARG_NAMES
+    )
     if supplied_count not in (0, len(CONFIG_ARG_NAMES)):
-        raise SystemExit("Provide all five runtime configuration values together")
+        raise SystemExit("Provide Chief model, Worker model, Reviewer model, and maximum Worker concurrency together")
     if args.main_model is not None and supplied_count != len(CONFIG_ARG_NAMES):
-        raise SystemExit("--main-model must be supplied together with the five runtime configuration values")
-    if args.reconfigure and supplied_count != len(CONFIG_ARG_NAMES):
-        raise SystemExit("--reconfigure requires all five runtime configuration values")
+        raise SystemExit("--main-model must be supplied together with the runtime configuration values")
+    if args.reconfigure and (supplied_count != len(CONFIG_ARG_NAMES) or not depth_supplied):
+        raise SystemExit("--reconfigure requires all model, concurrency, and per-role thinking-depth values")
 
     if config_path.exists():
         existing = load_runtime_config(config_path)
         if args.reconfigure:
             return build_runtime_config(args, timestamp()), True
-        if supplied_count:
+        if supplied_count or args.main_model is not None or depth_supplied:
             raise SystemExit("Configuration already exists; use --reconfigure to change it")
         print(f"loaded existing runtime configuration from {config_path}")
         return existing, False
 
-    if supplied_count != len(CONFIG_ARG_NAMES):
+    if supplied_count != len(CONFIG_ARG_NAMES) or not depth_supplied:
         raise SystemExit(
-            "First use requires Chief model, Worker model, Reviewer model, "
-            "maximum Worker concurrency, and thinking depth"
+            "First use requires Chief/Worker/Reviewer models, maximum Worker concurrency, "
+            "and thinking depth for Main, Chief, Worker, and Reviewer"
         )
     return build_runtime_config(args, timestamp()), True
 
@@ -289,7 +324,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-model")
     parser.add_argument("--reviewer-model")
     parser.add_argument("--max-worker-concurrency", type=int)
-    parser.add_argument("--thinking-depth", choices=THINKING_DEPTHS)
+    parser.add_argument("--thinking-depth", choices=THINKING_DEPTHS, help="Legacy common depth; new setup should use per-role flags")
+    parser.add_argument("--main-thinking-depth", choices=THINKING_DEPTHS)
+    parser.add_argument("--chief-thinking-depth", choices=THINKING_DEPTHS)
+    parser.add_argument("--worker-thinking-depth", choices=THINKING_DEPTHS)
+    parser.add_argument("--reviewer-thinking-depth", choices=THINKING_DEPTHS)
     parser.add_argument("--reconfigure", action="store_true")
     parser.add_argument("--file-policy", choices=FILE_POLICIES)
     parser.add_argument("--confirm-overwrite", action="store_true")
@@ -309,6 +348,7 @@ def main() -> int:
     runtime_config, config_changed = resolve_runtime_config(workflow_root, args)
     initialized_at = runtime_config["configured_at"]
     models = runtime_config["models"]
+    thinking_depth = runtime_config["thinking_depth"]
     values = {
         "PROJECT_NAME": args.project_name or root.name,
         "INITIALIZED_AT": initialized_at,
@@ -320,7 +360,10 @@ def main() -> int:
         "WORKER_MODEL": models["worker"],
         "REVIEWER_MODEL": models["reviewer"],
         "MAX_WORKER_CONCURRENCY": str(runtime_config["max_worker_concurrency"]),
-        "THINKING_DEPTH": runtime_config["thinking_depth"],
+        "MAIN_THINKING_DEPTH": thinking_depth["main"],
+        "CHIEF_THINKING_DEPTH": thinking_depth["chief"],
+        "WORKER_THINKING_DEPTH": thinking_depth["worker"],
+        "REVIEWER_THINKING_DEPTH": thinking_depth["reviewer"],
     }
     agents_template = AGENTS_TEMPLATE.read_text(encoding="utf-8")
     memory_template = MEMORY_TEMPLATE.read_text(encoding="utf-8")
@@ -346,7 +389,7 @@ def main() -> int:
 
     initial_files = {
         workflow_root / "PLAN.md": """# Workflow Plan\n\n## Objective\n\nPending Initial Chief Planning.\n\n## User Requirements\n\nPending Initial Chief Planning.\n\n## Non-Goals\n\nPending Initial Chief Planning.\n\n## Repository Understanding\n\nPending Initial Chief Planning.\n\n## Proposed Approach\n\nPending Initial Chief Planning.\n\n## Key Design Decisions\n\nPending Initial Chief Planning.\n\n## Critical Invariants\n\nPending Initial Chief Planning.\n\n## Global Acceptance Criteria\n\nPending Initial Chief Planning.\n\n## Task Graph\n\nPending Initial Chief Planning. Record semantic dependencies only; do not record runtime concurrency here.\n\n## Risks / Uncertainties\n\nPending Initial Chief Planning.\n\n## Main Flexibility\n\nPending Initial Chief Planning.\n\n## Chief-Owned Decisions\n\nPending Initial Chief Planning.\n""",
-        workflow_root / "MAIN_BRIEF.md": """# Main Orchestrator Brief\n\n## Current Mission\n\nPending Initial Chief Planning.\n\n## Execution Starting Point\n\nPending Initial Chief Planning. List tasks whose dependencies are satisfied; do not prescribe concurrency here.\n\n## Runtime Authority\n\nMain owns runtime dispatch, concurrency, retries, evidence collection, state maintenance, and bounded adaptations inside the accepted plan.\n\n## Do Not Decide Without Chief\n\nPending Initial Chief Planning.\n\n## Reviewer Failure Policy\n\nA formal Reviewer `FAIL` is the only event that increments `worker_failures`.\n\n- FAIL #1 → Main sends an escalation packet to Chief for a Decision Delta.\n- FAIL #2 → Main dispatches an isolated Expert Worker by default.\n- If FAIL #2 contains explicit plan-level evidence, Main routes it to Chief instead.\n- If an Expert Worker is reviewed and receives `FAIL`, Main routes the result to Chief.\n\n## Worker Failure Policy\n\nWorker Failure means a formal Reviewer `FAIL`.\n\nOrdinary Worker test failures, shell errors, tool errors, timeouts, and self-repaired implementation mistakes do not increment `worker_failures`.\n\nAt `worker_failures >= 2`, prefer Expert Worker unless explicit evidence indicates that the accepted plan itself needs reinterpretation or change.\n\n## Important Invariants\n\nPending Initial Chief Planning.\n\n## Escalation Guidance\n\nPending Initial Chief Planning.\n\n## Relevant Artifact Map\n\nSee `PLAN.md`, `MEMORY.md`, `STATE.json`, `tasks/`, `results/`, `reviews/`, `review-bundles/`, `decisions/`, and `events.jsonl` under `Workflow/`.\n""",
+        workflow_root / "MAIN_BRIEF.md": """# Main Orchestrator Brief\n\n## Current Mission\n\nPending Initial Chief Planning.\n\n## Execution Starting Point\n\nPending Initial Chief Planning. List tasks whose dependencies are satisfied; do not prescribe concurrency here.\n\n## Runtime Authority\n\nMain owns runtime dispatch, concurrency, retries, evidence collection, state maintenance, and bounded adaptations inside the accepted plan.\n\n## Do Not Decide Without Chief\n\nPending Initial Chief Planning.\n\n## Reviewer Failure Policy\n\nA formal Reviewer `FAIL` is the only event that increments `worker_failures`.\n\n- FAIL #1 → Main sends an escalation packet to Chief for a Decision Delta.\n- FAIL #2 → Main dispatches an isolated Expert Worker by default.\n- If FAIL #2 contains explicit plan-level evidence, Main routes it to Chief instead.\n- If an Expert Worker is reviewed and receives `FAIL`, Main routes the result to Chief.\n\n## Worker Failure Policy\n\nWorker Failure means a formal Reviewer `FAIL`.\n\nOrdinary Worker test failures, shell errors, tool errors, timeouts, and self-repaired implementation mistakes do not increment `worker_failures`.\n\nAt `worker_failures >= 2`, prefer Expert Worker unless explicit evidence indicates that the accepted plan itself needs reinterpretation or change.\n\n## Important Invariants\n\nPending Initial Chief Planning.\n\n## Escalation Guidance\n\nPending Initial Chief Planning.\n\n## Relevant Artifact Map\n\nSee `PLAN.md`, `MEMORY.md`, `STATE.json`, `tasks/`, `results/`, `reviews/`, `review-bundles/`, `decisions/`, `events.jsonl`, `watchdog.json`, `heartbeats.json`, and `watchdog-alerts.jsonl` under `Workflow/`.\n""",
     }
     for path, content in initial_files.items():
         if path.exists():

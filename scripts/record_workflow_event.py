@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from watchdog import update_heartbeat
+
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 VISIBLE_WORKFLOW_DIRNAME = "Workflow"
@@ -95,6 +97,14 @@ def status_for_event(event_type: str) -> str | None:
         "task_blocked": "BLOCKED",
         "blocked": "BLOCKED",
     }.get(event_type)
+
+
+def heartbeat_status(event_type: str) -> str:
+    if event_type in {"task_blocked", "blocked"}:
+        return "BLOCKED"
+    if event_type in {"worker_completed", "review_completed", "review_passed", "task_closed", "workflow_closed"}:
+        return "IDLE"
+    return "ACTIVE"
 
 
 def aggregate_workflow_status(tasks: dict) -> str:
@@ -278,6 +288,9 @@ def main() -> int:
         with events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         update_state(workflow_root / "STATE.json", args, event_type, event_time)
+        heartbeat_role = "Chief" if args.role == "Chef" else args.role
+        if heartbeat_role in {"Main", "Chief", "Worker", "Reviewer", "Expert Worker"}:
+            update_heartbeat(workflow_root, heartbeat_role, args.task_id, heartbeat_status(event_type))
         fcntl.flock(lock, fcntl.LOCK_UN)
     print(f"recorded runtime event in {events_path}")
     print(f"updated operational state in {workflow_root / 'STATE.json'}")

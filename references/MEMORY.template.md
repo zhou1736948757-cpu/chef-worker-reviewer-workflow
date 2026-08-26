@@ -8,6 +8,9 @@
 - Source contract: `AGENTS.md`
 - Runtime state: `Workflow/STATE.json`
 - Runtime events: `Workflow/events.jsonl`
+- Watchdog settings: `Workflow/watchdog.json`
+- Role heartbeats: `Workflow/heartbeats.json`
+- Watchdog alerts: `Workflow/watchdog-alerts.jsonl`
 
 ### Runtime configuration summary
 
@@ -18,8 +21,12 @@
 - Worker model: `{{WORKER_MODEL}}`
 - Reviewer model: `{{REVIEWER_MODEL}}`
 - Worker maximum concurrency: `{{MAX_WORKER_CONCURRENCY}}`
-- Default thinking depth: `{{THINKING_DEPTH}}`
+- Main thinking depth: `{{MAIN_THINKING_DEPTH}}`
+- Chief thinking depth: `{{CHIEF_THINKING_DEPTH}}`
+- Worker thinking depth: `{{WORKER_THINKING_DEPTH}}`
+- Reviewer thinking depth: `{{REVIEWER_THINKING_DEPTH}}`
 - Configuration file: `Workflow/config.json`
+- Watchdog interval: 600 seconds by default; suspected stalls are reported to Main for a decision
 
 <!-- chef-worker-reviewer-workflow:runtime-config:end -->
 

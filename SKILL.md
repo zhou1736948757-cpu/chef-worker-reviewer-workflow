@@ -39,7 +39,7 @@ Do not infer the user's choice from “继续”“可以” or a general approv
 
 ## Visible workflow directory
 
-Use a visible, project-root `Workflow/` directory as the canonical artifact root. Do not create a hidden `.workflow/` directory for new projects. Keep `Workflow/` in the normal project tree so users can inspect packets, results, reviews, decisions, the manifest, and runtime configuration directly.
+Use only a visible, project-root `Workflow/` directory as the canonical artifact root. Never create a hidden `.workflow/` directory or any other hidden workflow directory/file for a new project. Keep `Workflow/` in the normal project tree so users can inspect packets, results, reviews, decisions, the manifest, runtime configuration, and Watchdog records directly.
 
 If a legacy project contains `.workflow/` but no `Workflow/`, stop and explain the migration. After explicit approval, run the initializer with `--migrate-legacy`; it copies the legacy directory to `Workflow/` and preserves `.workflow/` as a backup. If both directories exist, do not guess which is authoritative; resolve them explicitly before continuing.
 
@@ -47,16 +47,15 @@ If a legacy project contains `.workflow/` but no `Workflow/`, stop and explain t
 
 Before creating `AGENTS.md`, `MEMORY.md`, or dispatching any task, inspect `Workflow/config.json`.
 
-If it does not exist, ask the user these six questions and wait for answers:
+If it does not exist, first explain the capability profile of each role in plain language, then ask for each model and that model's thinking depth together. This explanation is mandatory, not an optional recommendation. Ask these values and wait for answers:
 
-1. Which exact model is the Main/Orchestrator model, if the harness exposes or can route it? If Main is fixed as the current conversation, record that fact rather than inventing a routing setting.
-2. Which exact model should run as the persistent Chief?
-3. Which exact model should run as Worker?
-4. Which exact model should run as Reviewer?
+1. Which exact model and thinking depth should Main/Orchestrator use? If Main is fixed as the current conversation, record that fact rather than inventing a routing setting, and still confirm Main's depth if the harness exposes it.
+2. Which exact model and thinking depth should the persistent Chief use?
+3. Which exact model and thinking depth should Worker use?
+4. Which exact model and thinking depth should Reviewer use?
 5. What is the maximum number of Workers allowed to run concurrently?
-6. What default thinking depth should delegated roles use? Accept only a depth supported by the selected harness, such as `low`, `medium`, `high`, or `xhigh`.
 
-Before asking, explain capability profiles rather than naming providers: recommended intelligence is `Chief > Reviewer > Main ≈ Worker`; expected call volume is `Worker > Main > Reviewer > Chief`; these are heuristics, not hard constraints. Main should be stable, tool-capable, fast, and cost-efficient; Chief should be strongest at planning, architecture, long context, ambiguity resolution, and re-planning; Worker should be coding/tool/repository strong and high-throughput; Reviewer should be independent, diagnostic, and root-cause oriented. Main may share Worker’s model. Do not silently invent a model, concurrency limit, or thinking depth. If the harness exposes a model or reasoning catalog, validate answers against it; otherwise preserve exact identifiers and report that runtime support still needs verification.
+Before asking, present this role-to-capability explanation in plain language: Main is the stable, tool-capable runtime coordinator and should favor reliable, responsive reasoning; Chief handles architecture, ambiguity, long context, and re-planning and should receive the strongest planning depth; Worker performs coding, repository edits, tests, and high-volume execution and should favor practical tool-oriented depth; Reviewer independently diagnoses root causes, checks evidence, and judges acceptance and should receive enough depth for adversarial analysis. Expert Worker inherits Chief's model and depth but is temporary. A useful starting profile is `Chief > Reviewer > Main ≈ Worker` for reasoning intensity and `Worker > Main > Reviewer > Chief` for call volume; these are heuristics, not silent defaults. For every role, explain why the selected model/depth fits that role, ask the pair together, validate both against the harness when possible, and do not silently invent either value.
 
 Persist the answers in `Workflow/config.json` using this shape:
 
@@ -72,11 +71,39 @@ Persist the answers in `Workflow/config.json` using this shape:
     "reviewer": "<model-id>"
   },
   "max_worker_concurrency": 1,
-  "thinking_depth": "medium"
+  "thinking_depth": {
+    "main": "medium",
+    "chief": "high",
+    "worker": "medium",
+    "reviewer": "high"
+  }
 }
 ```
 
-On later invocations, read and display this configuration briefly instead of asking again. v1.3 configurations without `models.main` remain valid and are interpreted as `current-main-conversation`. Ask the configuration questions again only when the user explicitly requests reconfiguration. Record configuration changes as a durable decision, not a routine event. Do not change models, concurrency, or thinking depth halfway through an active task without a Chief decision.
+On later invocations, read and display this configuration briefly instead of asking again. v1.3 configurations without `models.main` remain valid and are interpreted as `current-main-conversation`; a legacy single `thinking_depth` is expanded to all four roles for compatibility. Ask the configuration questions again only when the user explicitly requests reconfiguration. Record configuration changes as a durable decision, not a routine event. Do not change a role's model, concurrency, or thinking depth halfway through an active task without a Chief decision.
+
+## Watchdog (mandatory at workflow start)
+
+Before dispatching Main, Chief, Worker, Reviewer, or Expert Worker, create and start the visible Workflow Watchdog:
+
+```bash
+python3 <skill-root>/scripts/watchdog.py \
+  --project-root <project-root> \
+  --start --background \
+  --interval-seconds 600 \
+  --stale-after-seconds 600
+```
+
+The Watchdog records `Workflow/watchdog.json`, `Workflow/heartbeats.json`, and `Workflow/watchdog-alerts.jsonl`; it never creates a hidden directory. Runtime events also refresh the corresponding role heartbeat. A role or active task with no heartbeat/runtime update for 600 seconds is reported as a suspected network, supplier/provider, or unresponsive-agent stall. This is an evidence-based suspicion, not a claim about the cause. The alert is written to the visible alert log and `events.jsonl`, and printed for Main. Main decides whether to inspect, retry, serialize, reconfigure, or escalate; the Watchdog never restarts agents, changes models, or bypasses Main.
+
+If the host cannot keep a background process, run the same script with `--once` from the host's recurring monitor every 600 seconds. Main and every delegated role should send a heartbeat before and after long tool/provider calls:
+
+```bash
+python3 <skill-root>/scripts/watchdog.py \
+  --project-root <project-root> --heartbeat \
+  --role <Main|Chief|Worker|Reviewer|Expert Worker> \
+  --task-id <task-id> --status ACTIVE
+```
 
 ## Main / Chief authority boundary
 
@@ -154,21 +181,25 @@ Before dispatch, Main records at least: planned Worker concurrency, planned Revi
      --worker-model <worker-model-id> \
      --reviewer-model <reviewer-model-id> \
      --max-worker-concurrency <positive-integer> \
-     --thinking-depth <supported-depth>
+     --main-thinking-depth <supported-depth> \
+     --chief-thinking-depth <supported-depth> \
+     --worker-thinking-depth <supported-depth> \
+     --reviewer-thinking-depth <supported-depth>
    ```
 
-   The script writes `Workflow/config.json`, creates or updates only the managed workflow section of `AGENTS.md`, creates `MEMORY.md` when absent, preserves existing user content, and creates visible `Workflow/` planning, state, event, packet, and review-bundle artifacts. On a later run, omit the configuration flags to reuse the saved configuration; pass `--reconfigure` together with the five runtime flags and optional `--main-model` only after explicit user approval. The legacy `--chef-model` alias remains accepted, but new invocations should use `--chief-model`. It never replaces an existing project memory file wholesale.
+   The script writes `Workflow/config.json`, creates or updates only the managed workflow section of `AGENTS.md`, creates `MEMORY.md` when absent, preserves existing user content, and creates visible `Workflow/` planning, state, event, packet, and review-bundle artifacts. It never creates hidden `.workflow/` for a new project. On a later run, omit the configuration flags to reuse the saved configuration; pass `--reconfigure` together with the model, concurrency, and four per-role thinking-depth flags only after explicit user approval. The legacy `--chef-model` and common `--thinking-depth` forms remain accepted for old configurations, but new invocations should use `--chief-model` plus per-role depth flags. It never replaces an existing project memory file wholesale.
 
-5. Emit the Main/Chief task-start reminder above, including configured-versus-observed model status.
-6. For a large initial prompt, wait for Chief to complete `PLAN.md`, `MAIN_BRIEF.md`, and initial task packets; for a bounded follow-up inside the accepted plan, Main may create a runtime task directly.
-7. Decide and record effective Worker and Reviewer concurrency using the quality gate above. Dispatch one Worker per bounded task; allow parallel Workers only when Main confirms the isolation and evidence conditions, and never exceed `max_worker_concurrency` from `Workflow/config.json`.
-8. Require the Worker to write a structured result at `Workflow/results/<task-id>.md` containing changed files, per-criterion results, test counts, evidence, deviations, unresolved issues, Reviewer focus, and Memory candidates.
-9. Build `Workflow/review-bundles/<task-id>/<attempt>/` when useful, then send the original task packet, bundle, actual diff, and Worker result to an independent Reviewer context. Prefer explicit `base-revision`/`review-revision` or a task-specific patch. Do not fall back to a dirty shared-worktree diff while another task is active; wait or create a stable boundary. Require a structured report at `Workflow/reviews/<task-id>-r<N>.md`.
-10. On `PASS`, update `STATE.json`, let Main gate Memory candidates, and close the task. On first `FAIL`, route Main → Chief; on second `FAIL`, route Main → Expert Worker by default unless explicit plan-level evidence requires Chief; after an Expert Worker `FAIL`, route Main → Chief. On `BLOCKED`, or a Chief-directed replan, write a decision artifact in `Workflow/decisions/`.
+5. Start the visible Watchdog before dispatching any role, using the command in the Watchdog section. Confirm that `Workflow/watchdog.json` exists and report that monitoring is active to Main.
+6. Emit the Main/Chief task-start reminder above, including configured-versus-observed model status.
+7. For a large initial prompt, wait for Chief to complete `PLAN.md`, `MAIN_BRIEF.md`, and initial task packets; for a bounded follow-up inside the accepted plan, Main may create a runtime task directly.
+8. Decide and record effective Worker and Reviewer concurrency using the quality gate above. Dispatch one Worker per bounded task; allow parallel Workers only when Main confirms the isolation and evidence conditions, and never exceed `max_worker_concurrency` from `Workflow/config.json`.
+9. Require the Worker to write a structured result at `Workflow/results/<task-id>.md` containing changed files, per-criterion results, test counts, evidence, deviations, unresolved issues, Reviewer focus, and Memory candidates.
+10. Build `Workflow/review-bundles/<task-id>/<attempt>/` when useful, then send the original task packet, bundle, actual diff, and Worker result to an independent Reviewer context. Prefer explicit `base-revision`/`review-revision` or a task-specific patch. Do not fall back to a dirty shared-worktree diff while another task is active; wait or create a stable boundary. Require a structured report at `Workflow/reviews/<task-id>-r<N>.md`.
+11. On `PASS`, update `STATE.json`, let Main gate Memory candidates, and close the task. On first `FAIL`, route Main → Chief; on second `FAIL`, route Main → Expert Worker by default unless explicit plan-level evidence requires Chief; after an Expert Worker `FAIL`, route Main → Chief. On `BLOCKED`, or a Chief-directed replan, write a decision artifact in `Workflow/decisions/`.
 
 If the harness cannot create subagents, simulate the same separation in distinct phases and still persist the task, result, and review artifacts.
 
-When dispatching, pass Worker and Reviewer their configured models and the configured `thinking_depth`; pass Chief its configured model and a planning or escalation prompt. Keep Main in the current main conversation. Worker, Reviewer, and Expert Worker return runtime issues to Main and never directly call Chief. Treat a harness rejection as a configuration error; stop and ask whether to reconfigure instead of silently falling back to another model or depth.
+When dispatching, pass each role its configured model and its own `thinking_depth`: Main remains the current main conversation, Chief uses the Chief depth, Worker uses the Worker depth, Reviewer uses the Reviewer depth, and Expert Worker inherits Chief-class model/depth. Treat a harness rejection as a configuration error; stop and ask whether to reconfigure instead of silently falling back to another model or depth. Worker, Reviewer, and Expert Worker return runtime issues to Main and never directly call Chief.
 
 ## Role contracts
 
@@ -245,9 +276,9 @@ Never solve a review loop by weakening the acceptance criteria without a recorde
 Keep policy and state separate:
 
 - `AGENTS.md` is the durable rulebook: role boundaries, workflow protocol, evidence rules, artifact paths, and safety constraints.
-- `Workflow/config.json` is the runtime configuration: declared Main and persistent Chief models, Worker and Reviewer models, Worker concurrency limit, thinking depth, and configuration timestamp.
+- `Workflow/config.json` is the runtime configuration: declared Main and persistent Chief models, Worker and Reviewer models, Worker concurrency limit, each role's thinking depth, and configuration timestamp.
 - `MEMORY.md` is durable knowledge: project facts, confirmed decisions, important discoveries, known pitfalls, user constraints, durable risks, and approved Memory candidates.
-- `Workflow/STATE.json` is current operational state; `Workflow/events.jsonl` is the routine runtime log; `Workflow/` contains detailed packets and reports.
+- `Workflow/STATE.json` is current operational state; `Workflow/events.jsonl` is the routine runtime log; `Workflow/watchdog.json`, `Workflow/heartbeats.json`, and `Workflow/watchdog-alerts.jsonl` are visible Watchdog records; `Workflow/` contains detailed packets and reports.
 
 Review Bundle files are read-only snapshots; this immutability does not freeze the underlying repository. If the task packet, Worker result, or evidence changes, create a new attempt. `scripts/build_review_bundle.py` emits `UNSTABLE_REVIEW_DIFF` and refuses a fallback bundle when another active Worker task could contaminate a shared dirty worktree.
 
