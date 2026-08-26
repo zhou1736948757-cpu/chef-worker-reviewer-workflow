@@ -112,6 +112,25 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Provide thinking depth for Main, Chief, Worker, and Reviewer together", result.stderr)
 
+    def test_subagent_interruption_resumes_same_session_without_worker_failure(self) -> None:
+        self.initialize()
+        self.write_task()
+        common = (
+            "--project-root", str(self.project), "--task-id", "T-001", "--role", "Worker",
+            "--action", "continue same session", "--result", "provider timeout", "--session-id", "worker-session-1",
+            "--evidence", "checkpoint-1",
+        )
+        self.run_script("record_workflow_event.py", *common, "--event-type", "subagent_interrupted", "--interruption-reason", "provider timeout")
+        self.run_script("record_workflow_event.py", *common, "--event-type", "subagent_resume_requested", "--result", "sent continue")
+        self.run_script("record_workflow_event.py", *common, "--event-type", "subagent_resumed", "--result", "continued from checkpoint")
+        state = json.loads((self.project / "Workflow" / "STATE.json").read_text())
+        task = state["tasks"]["T-001"]
+        self.assertEqual(task["worker_failures"], 0)
+        self.assertEqual(task["subagent_sessions"]["Worker"]["session_id"], "worker-session-1")
+        self.assertEqual(task["subagent_sessions"]["Worker"]["resume_attempts"], 1)
+        events = (self.project / "Workflow" / "events.jsonl").read_text()
+        self.assertIn('"event_type": "subagent_resume_requested"', events)
+
     def test_initial_main_brief_has_final_failure_policy(self) -> None:
         self.initialize()
         brief = (self.project / "Workflow" / "MAIN_BRIEF.md").read_text(encoding="utf-8")

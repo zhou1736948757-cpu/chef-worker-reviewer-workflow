@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
         "workflow_initialized", "task_created", "task_started", "worker_dispatched",
         "worker_completed", "review_started", "review_completed", "review_passed",
         "review_failed", "expert_worker_dispatched", "repair_created", "decision_recorded",
+        "subagent_interrupted", "subagent_resume_requested", "subagent_resumed",
         "state_changed", "task_closed", "task_blocked", "blocked", "workflow_closed", "note",
     ))
     parser.add_argument("--evidence", default="none")
@@ -42,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timestamp", dest="event_timestamp")
     parser.add_argument("--event-id")
     parser.add_argument("--idempotency-key")
+    parser.add_argument("--session-id", help="Original Subagent session/continuation handle, when available")
+    parser.add_argument("--interruption-reason", help="Short category for a recoverable Subagent interruption")
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument(
         "--plan-level-issue",
@@ -166,6 +169,7 @@ def update_state(state_path: Path, args: argparse.Namespace, event_type: str, ev
     task.setdefault("next_route", "Main")
     task.setdefault("current_worker_kind", "normal")
     task.setdefault("same_reviewer_policy", None)
+    task.setdefault("subagent_sessions", {})
     if event_type in ("worker_dispatched", "expert_worker_dispatched"):
         task["worker_attempts"] += 1
         task["current_worker_kind"] = "expert" if event_type == "expert_worker_dispatched" else "normal"
@@ -215,6 +219,26 @@ def update_state(state_path: Path, args: argparse.Namespace, event_type: str, ev
         elif "REPLAN" in decision or "ASK_USER" in decision:
             task["chief_escalation_required"] = True
             task["next_route"] = "Chief" if "REPLAN" in decision else "Main"
+    elif event_type in {"subagent_interrupted", "subagent_resume_requested", "subagent_resumed"}:
+        session_role = "Chief" if args.role == "Chef" else args.role
+        sessions = task.setdefault("subagent_sessions", {})
+        session = sessions.setdefault(session_role, {"session_id": None, "resume_attempts": 0})
+        if args.session_id:
+            session["session_id"] = args.session_id
+        if event_type == "subagent_interrupted":
+            session["last_interruption"] = args.interruption_reason or args.result
+            session["interrupted_at"] = event_time
+            session["last_checkpoint"] = args.evidence
+            task["next_route"] = f"resume {session_role} same session"
+        elif event_type == "subagent_resume_requested":
+            session["resume_attempts"] = int(session.get("resume_attempts", 0)) + 1
+            session["last_resume_requested_at"] = event_time
+            session["last_checkpoint"] = args.evidence
+            task["next_route"] = f"resume {session_role} same session"
+        else:
+            session["last_resumed_at"] = event_time
+            session["last_checkpoint"] = args.evidence
+            task["next_route"] = "Main"
     event_status = args.status or status_for_event(event_type)
     if event_status:
         task["status"] = event_status
@@ -263,6 +287,8 @@ def main() -> int:
         "result": args.result,
         "evidence": args.evidence,
         "next_action": args.next_action,
+        "session_id": args.session_id,
+        "interruption_reason": args.interruption_reason,
     }
     events_path = workflow_root / "events.jsonl"
     lock_path = workflow_root / "events.jsonl.lock"

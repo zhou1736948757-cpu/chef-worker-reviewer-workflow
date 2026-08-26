@@ -81,7 +81,9 @@ Only formal Reviewer `FAIL` increments `worker_failures`. FAIL #1 sets Chief esc
 
 ## Runtime events
 
-`Workflow/events.jsonl` stores structured events such as `workflow_initialized`, `task_started`, `worker_dispatched`, `worker_completed`, `review_started`, `review_passed`, `review_failed`, `expert_worker_dispatched`, `repair_created`, `decision_recorded`, `state_changed`, `blocked`, and `task_closed`. Each event should include `event_id`, `event_type`, timestamp, task ID, role, concise action/result, evidence, and next action. Use a file lock or equivalent serialized append/update so concurrent events are not lost. Runtime events must not be appended to `MEMORY.md`.
+`Workflow/events.jsonl` stores structured events such as `workflow_initialized`, `task_started`, `worker_dispatched`, `worker_completed`, `review_started`, `review_passed`, `review_failed`, `expert_worker_dispatched`, `subagent_interrupted`, `subagent_resume_requested`, `subagent_resumed`, `repair_created`, `decision_recorded`, `state_changed`, `blocked`, and `task_closed`. Each event should include `event_id`, `event_type`, timestamp, task ID, role, concise action/result, evidence, and next action; continuation events should include the session handle when available and the safe checkpoint. Use a file lock or equivalent serialized append/update so concurrent events are not lost. Runtime events must not be appended to `MEMORY.md`.
+
+Transient network/provider errors, timeouts, rate limits, and context or thinking-token limits are recoverable interruptions. Main preserves the original Subagent/session and sends `继续` to that same session before considering any replacement. A replacement requires evidence that the session is unavailable/expired or that bounded continuation attempts failed; it does not inherit the original identity by assertion.
 
 `workflow_status` is recalculated from all task states after every task update. It is not a projection of the last event: any `BLOCKED` task blocks the workflow, `REPAIRING` takes precedence over active work, active `EXECUTING`/`REVIEWING` tasks prevent `PASSED`, and the workflow is `PASSED` only when every task is `PASSED`.
 

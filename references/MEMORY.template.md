@@ -60,7 +60,7 @@ Worker and Reviewer may propose additions here in their Result/Review artifacts.
 
 ### Retention boundary
 
-Do not record Worker/Reviewer started or finished events, routine PASS/FAIL trace, shell exits, retries, timeouts, waiting, status sync, or ordinary tool logs here. Those belong in `Workflow/events.jsonl`, `Workflow/STATE.json`, task artifacts, results, reviews, or decisions.
+Do not record Worker/Reviewer started or finished events, routine PASS/FAIL trace, shell exits, retries, interruptions, continuations, timeouts, waiting, status sync, or ordinary tool logs here. Those belong in `Workflow/events.jsonl`, `Workflow/STATE.json`, task artifacts, results, reviews, or decisions.
 
 ### Update rules
 

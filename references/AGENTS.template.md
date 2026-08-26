@@ -33,6 +33,12 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 6. On FAIL #2, Main dispatches a fresh isolated Expert Worker directly unless the Reviewer explicitly provides plan-level evidence; Expert Worker returns to the same Reviewer policy, and its FAIL goes to Chief through Main.
 7. `PASS` closes a task only after acceptance criteria, evidence, state, and durable Memory candidates are handled. `BLOCKED` returns to Main/Chief as appropriate.
 
+### Same-session interruption recovery
+
+- Network/provider errors, rate limits, transient timeouts, and context or thinking-token limits are recoverable interruptions first. Preserve the original Subagent/session and send `继续` to that same session with the last checkpoint and remaining acceptance criteria.
+- Record `subagent_interrupted`, `subagent_resume_requested`, and `subagent_resumed` in `Workflow/events.jsonl`; update the role heartbeat before and after continuation. Do not count a transient interruption as Reviewer `FAIL` or `worker_failures`.
+- Do not open a replacement Subagent unless the original session is explicitly unavailable/expired or bounded continuation attempts fail with evidence. Preserve the original record and keep the same role model/depth and Reviewer policy unless a documented Chief/user decision authorizes change.
+
 ### Concurrency quality gate
 
 - Worker and Reviewer subagents may run concurrently, but Main decides effective parallelism. `max_worker_concurrency` is a hard Worker ceiling, not a promise to use it.
@@ -60,7 +66,7 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 ### Runtime and evidence rules
 
 - Read `Workflow/config.json`, `Workflow/STATE.json`, and the relevant plan/brief before dispatch.
-- Use `Workflow/events.jsonl` for `task_started`, dispatch, completion, review, repair, and state events. `MEMORY.md` stores durable knowledge only; Worker/Reviewer submit Memory candidates and Main gates their merge.
+- Use `Workflow/events.jsonl` for `task_started`, dispatch, completion, review, repair, interruption, continuation, and state events. `MEMORY.md` stores durable knowledge only; Worker/Reviewer submit Memory candidates and Main gates their merge.
 - Start the visible Watchdog before dispatching roles; it checks every 600 seconds by default and reports stale heartbeat/runtime evidence to Main as a suspected network/provider/unresponsive-agent stall. Main decides the response; Watchdog never restarts agents, changes models, or bypasses Main.
 - `exit_code == 0` with `executed_tests == 0` is `INVALID_TEST_EXECUTION`, never a valid test `PASS`.
 - Reviewer `FAIL` reports must include Findings, Evidence, Likely Root Cause, Recommended Solution, Affected Scope, Regression Risks, and Confidence. A recommendation is not repair or architecture authorization.

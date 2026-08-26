@@ -1,6 +1,6 @@
 ---
 name: chef-worker-reviewer-workflow
-description: Orchestrate an LLM Conductor plus deterministic guardrails workflow with Main/Orchestrator, persistent Chief, Worker, Reviewer, and temporary Expert Worker roles. Use for initial global planning, bounded implementation, independent review, runtime state and evidence tracking, quality-gated concurrency, repair/escalation loops, and visible Workflow artifacts.
+description: Orchestrate an LLM Conductor plus deterministic guardrails workflow with Main/Orchestrator, persistent Chief, Worker, Reviewer, and temporary Expert Worker roles. Use for initial global planning, bounded implementation, independent review, same-session interruption recovery, runtime state and evidence tracking, quality-gated concurrency, repair/escalation loops, and visible Workflow artifacts.
 ---
 
 # Main / Chief / Worker / Reviewer Workflow
@@ -135,6 +135,18 @@ For a large initial project prompt, Main performs only basic context preparation
 Chief owns semantic dependencies, not runtime concurrency. Do not put `parallel_notes` or a concurrency plan in `PLAN.md`. After Main verifies the planning artifacts, Main takes over Runtime. If the harness cannot provide a persistent Chief, simulate the separation in distinct phases and record that limitation; do not claim persistence that does not exist.
 
 ## Runtime failure and Expert Worker
+
+## Subagent interruption recovery (mandatory)
+
+When Main, Chief, Worker, Reviewer, or Expert Worker reports a network failure, provider error, rate limit, transient timeout, context-window or thinking-token limit, or an otherwise interrupted turn, treat it first as a recoverable runtime interruption—not as a new task and not as a formal Reviewer `FAIL`.
+
+1. Preserve the original role, model, task, and session/continuation handle. Do not discard the Subagent context or open a replacement merely because one turn failed or reached a token limit.
+2. Send `继续` to the same Subagent/session. Include the task ID, the last confirmed checkpoint, the interruption category, the remaining acceptance criteria, and a request to continue from the last safe point. If the context window is full, use the host's same-session compaction/continuation mechanism; do not silently create a new Subagent.
+3. Record `subagent_interrupted`, `subagent_resume_requested`, and, when it returns, `subagent_resumed` in `Workflow/events.jsonl`, including the role, session handle when available, safe checkpoint, and next action. Refresh the role heartbeat before and after the continuation.
+4. During recovery, Main may retry with bounded backoff, reduce only the requested response size, or serialize the affected task. It must not change the model, thinking depth, task objective, acceptance criteria, or architecture just to get around the interruption.
+5. Only if the original session is explicitly unavailable/expired, or bounded same-session continuation attempts fail with evidence, may Main consider a replacement. Preserve the original record, explain why continuation was impossible, keep the same role contract/model/depth unless Chief or the user authorizes a change, and route the replacement through the normal Reviewer gate. If the harness has no continuation support, report that limitation instead of silently pretending a new Subagent is the same one.
+
+This rule applies to Main itself as well: a Main/provider interruption is resumed in the current main conversation. A transient interruption never increments `worker_failures`, does not count as a Reviewer verdict, and does not by itself wake Chief or dispatch Expert Worker. Watchdog alerts are recovery signals for Main, not permission to replace the affected Subagent.
 
 Worker Failure has one definition: only a formal Reviewer verdict of `FAIL` increments `worker_failures`. A Worker’s self-repaired test failure, shell/tool error, path error, temporary timeout, or intermediate retry does not increment it.
 
@@ -278,7 +290,7 @@ Keep policy and state separate:
 - `AGENTS.md` is the durable rulebook: role boundaries, workflow protocol, evidence rules, artifact paths, and safety constraints.
 - `Workflow/config.json` is the runtime configuration: declared Main and persistent Chief models, Worker and Reviewer models, Worker concurrency limit, each role's thinking depth, and configuration timestamp.
 - `MEMORY.md` is durable knowledge: project facts, confirmed decisions, important discoveries, known pitfalls, user constraints, durable risks, and approved Memory candidates.
-- `Workflow/STATE.json` is current operational state; `Workflow/events.jsonl` is the routine runtime log; `Workflow/watchdog.json`, `Workflow/heartbeats.json`, and `Workflow/watchdog-alerts.jsonl` are visible Watchdog records; `Workflow/` contains detailed packets and reports.
+- `Workflow/STATE.json` is current operational state; `Workflow/events.jsonl` is the routine runtime log, including same-session interruption and continuation records; `Workflow/watchdog.json`, `Workflow/heartbeats.json`, and `Workflow/watchdog-alerts.jsonl` are visible Watchdog records; `Workflow/` contains detailed packets and reports.
 
 Review Bundle files are read-only snapshots; this immutability does not freeze the underlying repository. If the task packet, Worker result, or evidence changes, create a new attempt. `scripts/build_review_bundle.py` emits `UNSTABLE_REVIEW_DIFF` and refuses a fallback bundle when another active Worker task could contaminate a shared dirty worktree.
 
