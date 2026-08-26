@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import posixpath
 import re
 import stat
 import subprocess
@@ -76,8 +77,18 @@ def expected_scope(task_text: str) -> list[str]:
     return sorted(set(values))
 
 
+def normalize_scope_path(value: str) -> str:
+    return posixpath.normpath(value.strip().strip("`"))
+
+
+def path_within_scope(path: str, scope: str) -> bool:
+    normalized_path = normalize_scope_path(path)
+    normalized_scope = normalize_scope_path(scope)
+    return normalized_path == normalized_scope or normalized_path.startswith(normalized_scope.rstrip("/") + "/")
+
+
 def in_scope(path: str, expected: list[str]) -> bool:
-    return any(path == item or item.endswith("/") and path.startswith(item) for item in expected)
+    return any(path_within_scope(path, item) for item in expected)
 
 
 def sha256_bytes(value: bytes) -> str:

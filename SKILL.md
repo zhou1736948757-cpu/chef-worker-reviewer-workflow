@@ -228,13 +228,15 @@ READY → EXECUTING → REVIEWING → PASSED
                       REPAIRING ↺
 ```
 
-Move to `BLOCKED` or Chief escalation when any of these occurs:
+Move to Chief escalation when any of these occurs:
 
-- the same root cause remains after Chief-directed repair attempts;
-- Worker and Reviewer still disagree after one evidence exchange;
-- the proposed change exceeds the task scope or conflicts with the plan;
-- a critical security, data-loss, compatibility, or architecture risk appears;
-- required project information or external authority is missing.
+- an Expert Worker still receives a formal Reviewer `FAIL`;
+- Reviewer evidence explicitly shows that the accepted plan itself is invalid;
+- the task objective or acceptance criteria conflict;
+- architecture, ownership, interface semantics, or semantic dependencies need reinterpretation;
+- required user or product decisions are missing.
+
+A failed Chief-directed normal-Worker repair does not by itself require another Chief escalation. If that repair produces formal Reviewer `FAIL` #2, prefer Expert Worker unless explicit plan-level evidence exists. Use `BLOCKED` for an unresolved operational or safety blocker and route it to Main first.
 
 Never solve a review loop by weakening the acceptance criteria without a recorded Chief decision.
 

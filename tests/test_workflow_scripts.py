@@ -62,6 +62,21 @@ class WorkflowScriptTests(unittest.TestCase):
             args.extend([f"--{key.replace('_', '-')}", value])
         return self.run_script("record_workflow_event.py", *args)
 
+    def revision_fixture(self, scope: str, changed_path: str) -> None:
+        self.initialize()
+        self.write_task("T-001", scope)
+        (self.project / "Workflow" / "results" / "T-001.md").write_text("# Worker Result\n\n## Status\nPASS\n", encoding="utf-8")
+        source = self.project / changed_path
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("before\n", encoding="utf-8")
+        git_args = ["git", "-C", str(self.project)]
+        subprocess.run(git_args + ["init", "-q"], check=True, capture_output=True, text=True)
+        subprocess.run(git_args + ["add", "."], check=True, capture_output=True, text=True)
+        subprocess.run(git_args + ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base"], check=True, capture_output=True, text=True)
+        source.write_text("after\n", encoding="utf-8")
+        subprocess.run(git_args + ["add", changed_path], check=True, capture_output=True, text=True)
+        subprocess.run(git_args + ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "review"], check=True, capture_output=True, text=True)
+
     def test_initial_v14_artifacts_and_visible_directory(self) -> None:
         self.initialize()
         expected_files = {"PLAN.md", "MAIN_BRIEF.md", "STATE.json", "events.jsonl", "config.json", "manifest.json"}
@@ -69,6 +84,14 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertTrue((self.project / "Workflow" / "review-bundles").is_dir())
         self.assertFalse((self.project / ".workflow").exists())
         self.assertEqual(json.loads((self.project / "Workflow" / "config.json").read_text())["version"], "1.4")
+
+    def test_initial_main_brief_has_final_failure_policy(self) -> None:
+        self.initialize()
+        brief = (self.project / "Workflow" / "MAIN_BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("FAIL #1 → Main sends an escalation packet to Chief", brief)
+        self.assertIn("FAIL #2 → Main dispatches an isolated Expert Worker by default", brief)
+        self.assertIn("If an Expert Worker is reviewed and receives `FAIL`, Main routes the result to Chief", brief)
+        self.assertNotIn("is reported to Chief for a decision", brief)
 
     def test_v13_config_is_readable(self) -> None:
         self.initialize()
@@ -283,6 +306,43 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertEqual(metadata["diff_source"], "revision_boundary")
         self.assertEqual(metadata["stability_signal"], "SAFE")
         self.assertEqual(metadata["changed_files"], ["src/a.py"])
+
+    def test_directory_scope_without_trailing_slash_contains_nested_file(self) -> None:
+        self.revision_fixture("src/module", "src/module/a.py")
+        self.run_script(
+            "build_review_bundle.py", "--project-root", str(self.project), "--task-id", "T-001",
+            "--base-revision", "HEAD^", "--review-revision", "HEAD",
+        )
+        metadata = json.loads((self.project / "Workflow" / "review-bundles" / "T-001" / "1" / "metadata.json").read_text())
+        self.assertFalse(metadata["scope_violation"])
+
+    def test_directory_scope_with_trailing_slash_is_equivalent(self) -> None:
+        self.revision_fixture("src/module/", "src/module/a.py")
+        self.run_script(
+            "build_review_bundle.py", "--project-root", str(self.project), "--task-id", "T-001",
+            "--base-revision", "HEAD^", "--review-revision", "HEAD",
+        )
+        metadata = json.loads((self.project / "Workflow" / "review-bundles" / "T-001" / "1" / "metadata.json").read_text())
+        self.assertFalse(metadata["scope_violation"])
+
+    def test_directory_scope_rejects_prefix_collision(self) -> None:
+        self.revision_fixture("src/module", "src/module2/a.py")
+        built = self.run_script(
+            "build_review_bundle.py", "--project-root", str(self.project), "--task-id", "T-001",
+            "--base-revision", "HEAD^", "--review-revision", "HEAD", check=False,
+        )
+        self.assertNotEqual(built.returncode, 0)
+        metadata = json.loads((self.project / "Workflow" / "review-bundles" / "T-001" / "1" / "metadata.json").read_text())
+        self.assertTrue(metadata["scope_violation"])
+
+    def test_directory_scope_contains_nested_subdirectory(self) -> None:
+        self.revision_fixture("src/module", "src/module/sub/a.py")
+        self.run_script(
+            "build_review_bundle.py", "--project-root", str(self.project), "--task-id", "T-001",
+            "--base-revision", "HEAD^", "--review-revision", "HEAD",
+        )
+        metadata = json.loads((self.project / "Workflow" / "review-bundles" / "T-001" / "1" / "metadata.json").read_text())
+        self.assertFalse(metadata["scope_violation"])
 
     def test_dirty_shared_worktree_with_other_active_task_blocks_bundle(self) -> None:
         self.initialize()
