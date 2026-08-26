@@ -1,4 +1,4 @@
-# v1.4 Workflow file contract
+# v1.4.1 repair: v1.4 Workflow file contract
 
 The workflow is an LLM Conductor with deterministic guardrails. Main owns runtime execution; Chief owns semantic planning and plan-level decisions.
 
@@ -70,11 +70,13 @@ The initializer creates a small state object:
 }
 ```
 
-Only formal Reviewer `FAIL` increments `worker_failures`. Worker self-repair, tool errors, path errors, temporary timeouts, and intermediate test failures do not. Main may update state for runtime conditions; it must not change semantic task dependencies without Chief.
+Only formal Reviewer `FAIL` increments `worker_failures`. FAIL #1 sets Chief escalation required. FAIL #2 routes to a fresh Expert Worker by default, unless explicit plan-level evidence requires Chief; Expert Worker FAIL routes to Chief through Main. Worker self-repair, tool errors, path errors, temporary timeouts, and intermediate test failures do not. Main may update state for runtime conditions; it must not change semantic task dependencies without Chief.
 
 ## Runtime events
 
 `Workflow/events.jsonl` stores structured events such as `workflow_initialized`, `task_started`, `worker_dispatched`, `worker_completed`, `review_started`, `review_passed`, `review_failed`, `expert_worker_dispatched`, `repair_created`, `decision_recorded`, `state_changed`, `blocked`, and `task_closed`. Each event should include `event_id`, `event_type`, timestamp, task ID, role, concise action/result, evidence, and next action. Use a file lock or equivalent serialized append/update so concurrent events are not lost. Runtime events must not be appended to `MEMORY.md`.
+
+`workflow_status` is recalculated from all task states after every task update. It is not a projection of the last event: any `BLOCKED` task blocks the workflow, `REPAIRING` takes precedence over active work, active `EXECUTING`/`REVIEWING` tasks prevent `PASSED`, and the workflow is `PASSED` only when every task is `PASSED`.
 
 ## Task packet
 
@@ -90,13 +92,13 @@ Each `Workflow/results/<task-id>.md` records Task ID, Status, Summary, Changed/A
 
 ## Reviewer report
 
-Each `Workflow/reviews/<task-id>-r<N>.md` includes Verdict (`PASS`, `FAIL`, or `BLOCKED`), Findings, Evidence, Likely Root Cause, Recommended Solution, Affected Scope, Regression Risks, and Confidence. Findings use `BLOCKER`, `MAJOR`, `MINOR`, or `QUESTION`. A Reviewer recommendation is not repair authorization or architecture authority. After an Expert Worker, review returns to the same logical Reviewer/model policy; prior findings are supplied, but the new attempt is checked for regressions too.
+Each `Workflow/reviews/<task-id>-r<N>.md` includes Verdict (`PASS`, `FAIL`, or `BLOCKED`), Findings, Evidence, Likely Root Cause, Recommended Solution, Affected Scope, Regression Risks, and Confidence. Findings use `BLOCKER`, `MAJOR`, `MINOR`, or `QUESTION`. A Reviewer recommendation is not repair authorization or architecture authority. After an Expert Worker, review returns to the same Reviewer policy: prefer the same persistent Reviewer session; otherwise use the same Reviewer model, role contract, and reasoning/configuration, and supply previous findings. A session ID is not mandatory.
 
 ## Review Bundle
 
-`Workflow/review-bundles/<task-id>/<attempt>/` is bundle-first Reviewer context, not an information boundary. Each repair or changed evidence set gets a new attempt; do not overwrite an existing bundle. It should contain:
+`Workflow/review-bundles/<task-id>/<attempt>/` is bundle-first Reviewer context, not an information boundary. Each repair or changed evidence set gets a new attempt; do not overwrite an existing bundle. Generated bundle files are read-only snapshots; `immutable` does not mean that the underlying repository cannot change. It should contain:
 
-- `metadata.json` — task, base/review revisions, changed files, expected scope, scope signal;
+- `metadata.json` — task, base/review revisions, diff source and stability signal, changed files, expected scope, scope signal, and source hashes;
 - `task-packet.md` and `worker-result.md`;
 - `changed-files.txt` and `diff.patch`;
 - `tests.json`;
@@ -111,7 +113,7 @@ Important Chief decisions go in `Workflow/decisions/D-xxx.md` with Trigger, New 
 
 ## Authority and concurrency
 
-Main owns runtime concurrency. Chief owns semantic dependency. Programs may emit `SAFE`, `WARNING`, or `BLOCKED` for dependency, expected-write-scope, shared-resource, and Reviewer-read-stability checks, but do not replace Main with an automatic scheduler. Main may choose serial execution even after `SAFE`. Shared files, parent/child paths, lockfiles, schema/migrations, generated outputs, package manifests, shared fixtures/services, ports, devices, destructive global state, or unstable review evidence default to serial or blocked.
+Main owns runtime concurrency. Chief owns semantic dependency. Programs may emit `SAFE`, `WARNING`, or `BLOCKED` for dependency, expected-write-scope, shared-resource, and Reviewer-read-stability checks, but do not replace Main with an automatic scheduler. Main may choose serial execution even after `SAFE`. A global scope overlap scan is a `WARNING`, but an actual requested parallel Worker pair with shared worktree plus exact or parent/child overlapping write scopes is `BLOCKED` unless isolated worktrees are declared. Reviewer/Worker overlap is `BLOCKED` without a stable task snapshot, revision boundary, or isolated worktree.
 
 ## Durable MEMORY
 

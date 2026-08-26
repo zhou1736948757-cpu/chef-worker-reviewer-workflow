@@ -222,7 +222,7 @@ def resolve_runtime_config(workflow_root: Path, args: argparse.Namespace) -> tup
 
     if supplied_count != len(CONFIG_ARG_NAMES):
         raise SystemExit(
-            "First use requires Chef model, Worker model, Reviewer model, "
+            "First use requires Chief model, Worker model, Reviewer model, "
             "maximum Worker concurrency, and thinking depth"
         )
     return build_runtime_config(args, timestamp()), True
@@ -285,7 +285,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chief", default="TBD")
     parser.add_argument("--worker", default="TBD")
     parser.add_argument("--reviewer", default="TBD")
-    parser.add_argument("--chef-model", "--chief-model", dest="chef_model")
+    parser.add_argument("--chief-model", "--chef-model", dest="chef_model")
     parser.add_argument("--worker-model")
     parser.add_argument("--reviewer-model")
     parser.add_argument("--max-worker-concurrency", type=int)

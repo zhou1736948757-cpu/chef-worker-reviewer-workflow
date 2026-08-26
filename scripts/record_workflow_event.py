@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--event-id")
     parser.add_argument("--idempotency-key")
     parser.add_argument("--attempt", type=int, default=1)
+    parser.add_argument(
+        "--plan-level-issue",
+        action="store_true",
+        help="Mark a formal Reviewer FAIL as explicit evidence that the accepted plan needs Chief review",
+    )
     return parser.parse_args()
 
 
@@ -92,6 +97,28 @@ def status_for_event(event_type: str) -> str | None:
     }.get(event_type)
 
 
+def aggregate_workflow_status(tasks: dict) -> str:
+    """Project the workflow status from every task, never from the last event."""
+    if not tasks:
+        return "READY"
+    statuses = {
+        task.get("status", "READY")
+        for task in tasks.values()
+        if isinstance(task, dict)
+    }
+    if "BLOCKED" in statuses:
+        return "BLOCKED"
+    if "REPAIRING" in statuses:
+        return "REPAIRING"
+    if statuses.intersection({"EXECUTING", "REVIEWING", "ACTIVE"}):
+        return "ACTIVE"
+    if statuses.intersection({"READY", "PLANNED"}):
+        return "READY"
+    if statuses and statuses.issubset({"PASSED"}):
+        return "PASSED"
+    return "ACTIVE"
+
+
 def update_state(state_path: Path, args: argparse.Namespace, event_type: str, event_time: str) -> None:
     state = load_json_object(
         state_path,
@@ -113,25 +140,75 @@ def update_state(state_path: Path, args: argparse.Namespace, event_type: str, ev
         "review_attempts": 0,
         "worker_failures": 0,
         "expert_worker_required": False,
+        "chief_escalation_required": False,
+        "plan_level_issue": False,
+        "next_route": "Main",
+        "current_worker_kind": "normal",
+        "same_reviewer_policy": None,
     })
     if not isinstance(task, dict):
         raise SystemExit(f"{state_path}.tasks.{args.task_id} must be an object")
     task.setdefault("worker_attempts", 0)
     task.setdefault("review_attempts", 0)
     task.setdefault("worker_failures", 0)
+    task.setdefault("chief_escalation_required", False)
+    task.setdefault("plan_level_issue", False)
+    task.setdefault("next_route", "Main")
+    task.setdefault("current_worker_kind", "normal")
+    task.setdefault("same_reviewer_policy", None)
     if event_type in ("worker_dispatched", "expert_worker_dispatched"):
         task["worker_attempts"] += 1
+        task["current_worker_kind"] = "expert" if event_type == "expert_worker_dispatched" else "normal"
+        task["next_route"] = "Reviewer"
+        if event_type == "expert_worker_dispatched":
+            task["expert_worker_required"] = False
+            task["chief_escalation_required"] = False
+            task["same_reviewer_policy"] = {
+                "mode": "same-logical-reviewer",
+                "session_preferred": True,
+                "fallback": "same model + role + reasoning/config",
+                "previous_findings_required": True,
+            }
     elif event_type == "review_started":
         task["review_attempts"] += 1
+        task["next_route"] = "Reviewer"
     elif event_type == "review_failed":
         task["worker_failures"] += 1
-        task["expert_worker_required"] = task["worker_failures"] >= 2
+        task["plan_level_issue"] = bool(args.plan_level_issue)
+        if task["current_worker_kind"] == "expert":
+            task["expert_worker_required"] = False
+            task["chief_escalation_required"] = True
+            task["next_route"] = "Chief"
+        elif task["worker_failures"] == 1:
+            task["expert_worker_required"] = False
+            task["chief_escalation_required"] = True
+            task["next_route"] = "Chief"
+        elif args.plan_level_issue:
+            task["expert_worker_required"] = False
+            task["chief_escalation_required"] = True
+            task["next_route"] = "Chief"
+        else:
+            task["expert_worker_required"] = True
+            task["chief_escalation_required"] = False
+            task["next_route"] = "Expert Worker"
     elif event_type == "review_passed":
         task["expert_worker_required"] = False
+        task["chief_escalation_required"] = False
+        task["plan_level_issue"] = False
+        task["next_route"] = "Main"
+        task["current_worker_kind"] = "normal"
+    elif event_type == "decision_recorded":
+        decision = f"{args.action} {args.result}".upper()
+        if "REPAIR" in decision:
+            task["chief_escalation_required"] = False
+            task["next_route"] = "Worker"
+        elif "REPLAN" in decision or "ASK_USER" in decision:
+            task["chief_escalation_required"] = True
+            task["next_route"] = "Chief" if "REPLAN" in decision else "Main"
     event_status = args.status or status_for_event(event_type)
     if event_status:
         task["status"] = event_status
-        state["workflow_status"] = event_status
+    state["workflow_status"] = aggregate_workflow_status(tasks)
     task["latest_runtime_update"] = event_time
     state["latest_runtime_update"] = event_time
     state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")

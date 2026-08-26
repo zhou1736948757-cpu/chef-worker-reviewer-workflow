@@ -21,6 +21,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--completed-task", action="append", default=[])
     parser.add_argument("--reviewing-task")
     parser.add_argument("--candidate-task")
+    parser.add_argument("--check-parallel", nargs=2, metavar=("TASK_A", "TASK_B"))
+    parser.add_argument(
+        "--isolated-worktrees",
+        action="store_true",
+        help="Allow overlapping Worker scopes only when each task has an isolated worktree",
+    )
+    parser.add_argument(
+        "--stable-review-snapshot",
+        action="store_true",
+        help="Declare that Reviewer evidence is an immutable task-specific snapshot",
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     return parser.parse_args()
 
@@ -135,9 +146,32 @@ def main() -> int:
     if args.reviewing_task and args.candidate_task:
         overlap = sorted({left_path for left_path in scopes.get(args.reviewing_task, set()) for right_path in scopes.get(args.candidate_task, set()) if paths_overlap(left_path, right_path)})
         if overlap:
-            issues.append({"severity": "BLOCKED", "code": "review_stability_conflict", "tasks": [args.reviewing_task, args.candidate_task], "paths": overlap})
+            if args.stable_review_snapshot or args.isolated_worktrees:
+                signals.append("SAFE")
+            else:
+                issues.append({"severity": "BLOCKED", "code": "review_stability_conflict", "tasks": [args.reviewing_task, args.candidate_task], "paths": overlap})
         else:
             signals.append("SAFE")
+
+    if args.check_parallel:
+        left_task, right_task = args.check_parallel
+        unknown = sorted({task_id for task_id in (left_task, right_task) if task_id not in known_ids})
+        if unknown:
+            issues.append({"severity": "BLOCKED", "code": "unknown_parallel_task", "tasks": unknown})
+        elif right_task in graph.get(left_task, set()) or left_task in graph.get(right_task, set()):
+            issues.append({"severity": "BLOCKED", "code": "parallel_dependency_conflict", "tasks": [left_task, right_task]})
+        else:
+            overlap = sorted({left_path for left_path in scopes[left_task] for right_path in scopes[right_task] if paths_overlap(left_path, right_path)})
+            if overlap and not args.isolated_worktrees:
+                issues.append({
+                    "severity": "BLOCKED",
+                    "code": "parallel_worker_write_conflict",
+                    "tasks": [left_task, right_task],
+                    "paths": overlap,
+                    "message": "Shared worktree plus overlapping writable scope cannot run concurrently",
+                })
+            else:
+                signals.append("SAFE")
 
     if any(issue["severity"] == "BLOCKED" for issue in issues):
         signals.append("BLOCKED")

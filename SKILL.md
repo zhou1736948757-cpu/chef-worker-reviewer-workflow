@@ -5,7 +5,9 @@ description: Orchestrate an LLM Conductor plus deterministic guardrails workflow
 
 # Main / Chief / Worker / Reviewer Workflow
 
-Use this skill as an LLM Conductor with deterministic guardrails. “Chef” is a user-facing alias for Chief, not a synonym for Main.
+This is the v1.4.1 repair release. Runtime config remains schema/version `1.4` for compatibility; do not treat this as a v1.5 redesign.
+
+Use this skill as an LLM Conductor with deterministic guardrails. New v1.4+ user-facing documentation uses `Chief`; legacy v1.3 configuration and CLI may still use `chef` internally.
 
 ## Operating model
 
@@ -109,13 +111,17 @@ Chief owns semantic dependencies, not runtime concurrency. Do not put `parallel_
 
 Worker Failure has one definition: only a formal Reviewer verdict of `FAIL` increments `worker_failures`. A Worker’s self-repaired test failure, shell/tool error, path error, temporary timeout, or intermediate retry does not increment it.
 
-After every formal Reviewer `FAIL`, Main records the event and sends a concise escalation packet to Chief containing the task packet, Worker result, Reviewer result, current repository state, failure count, and the decision required. The packet is a starting point, not an information boundary; Chief may inspect any relevant files, history, tests, diffs, or artifacts. Chief returns a Decision Delta such as `REPAIR`, `REPLAN`, or `ASK_USER`; Chief does not perform routine implementation.
+After the first formal Reviewer `FAIL`, Main records the event and sends a concise escalation packet to Chief containing the task packet, Worker result, Reviewer result, current repository state, failure count, and the decision required. The packet is a starting point, not an information boundary; Chief may inspect any relevant files, history, tests, diffs, or artifacts. Chief returns a Decision Delta such as `REPAIR`, `REPLAN`, or `ASK_USER`; Chief does not perform routine implementation.
 
-When the same task reaches `worker_failures >= 2`, do not mechanically repeat a normal Worker. Unless Chief chooses `REPLAN`, dispatch a temporary Expert Worker using the Chief model or a Chief-class configuration, in a fresh isolated context. Expert Worker solves only the concrete coding/debugging issue, is not Chief, cannot approve its own work, and does not share Chief’s persistent context. After Expert Worker completes, send the result back to the same Reviewer configuration (same logical Reviewer/model policy); the Reviewer checks the original finding, regressions, and acceptance criteria. If Expert Worker also receives `FAIL`, notify Chief again.
+On the second formal Reviewer `FAIL` for the same task, Main should dispatch a temporary Expert Worker directly, without waking Chief again, unless the Reviewer explicitly provides plan-level evidence: invalid objective, conflicting acceptance criteria, wrong architecture assumption or dependency graph, changed user requirement, or failed Chief repair direction. Expert Worker uses the Chief model or a Chief-class configuration in a fresh isolated context, solves only the bounded implementation problem, is not Chief, cannot approve its own work, and does not share Chief’s persistent context. If Expert Worker also receives `FAIL`, Main sends the new escalation packet to Chief.
+
+After Expert Worker completes, Main routes the result back to the same Reviewer policy: prefer the same Reviewer session; otherwise use the same Reviewer model, role contract, and reasoning/configuration, while supplying the previous finding. The Reviewer checks the original finding, regressions, and acceptance criteria. Worker, Reviewer, and Expert Worker never directly invoke or message Chief; all Runtime routing goes through Main.
+
+`workflow_status` is aggregated from all task states after each update. Any `BLOCKED` task blocks the workflow; `REPAIRING` and active `EXECUTING`/`REVIEWING` tasks prevent `PASSED`; the workflow is `PASSED` only when every task is `PASSED`. Never let the last task event overwrite the aggregate status.
 
 ## Concurrency and quality gate
 
-Worker and Reviewer subagents may run concurrently, but concurrency is an optimization decided by Main, not an automatic requirement. The configured `max_worker_concurrency` is a hard ceiling for Workers; Main separately chooses the effective Worker and Reviewer parallelism for each task and records the decision in the task packet. Chief defines semantic dependencies; Main owns runtime concurrency.
+Worker and Reviewer subagents may run concurrently, but concurrency is an optimization decided by Main, not an automatic requirement. The configured `max_worker_concurrency` is a hard ceiling for Workers; Main separately chooses the effective Worker and Reviewer parallelism for each task and records the decision in the task packet. Chief defines semantic dependencies; Main owns runtime concurrency. A requested Worker pair with overlapping writable scope in a shared worktree is hard-blocked; isolated worktrees are required for that override.
 
 Main may authorize parallel execution only when all of these conditions hold:
 
@@ -144,25 +150,25 @@ Before dispatch, Main records at least: planned Worker concurrency, planned Revi
      --chief <chief-owner> \
      --worker <worker-owner> \
      --reviewer <reviewer-owner> \
-     --chef-model <chief-model-id> \
+     --chief-model <chief-model-id> \
      --worker-model <worker-model-id> \
      --reviewer-model <reviewer-model-id> \
      --max-worker-concurrency <positive-integer> \
      --thinking-depth <supported-depth>
    ```
 
-   The script writes `Workflow/config.json`, creates or updates only the managed workflow section of `AGENTS.md`, creates `MEMORY.md` when absent, preserves existing user content, and creates visible `Workflow/` planning, state, event, packet, and review-bundle artifacts. On a later run, omit the configuration flags to reuse the saved configuration; pass `--reconfigure` together with the five legacy flags and optional `--main-model` only after explicit user approval. It never replaces an existing project memory file wholesale.
+   The script writes `Workflow/config.json`, creates or updates only the managed workflow section of `AGENTS.md`, creates `MEMORY.md` when absent, preserves existing user content, and creates visible `Workflow/` planning, state, event, packet, and review-bundle artifacts. On a later run, omit the configuration flags to reuse the saved configuration; pass `--reconfigure` together with the five runtime flags and optional `--main-model` only after explicit user approval. The legacy `--chef-model` alias remains accepted, but new invocations should use `--chief-model`. It never replaces an existing project memory file wholesale.
 
 5. Emit the Main/Chief task-start reminder above, including configured-versus-observed model status.
 6. For a large initial prompt, wait for Chief to complete `PLAN.md`, `MAIN_BRIEF.md`, and initial task packets; for a bounded follow-up inside the accepted plan, Main may create a runtime task directly.
 7. Decide and record effective Worker and Reviewer concurrency using the quality gate above. Dispatch one Worker per bounded task; allow parallel Workers only when Main confirms the isolation and evidence conditions, and never exceed `max_worker_concurrency` from `Workflow/config.json`.
 8. Require the Worker to write a structured result at `Workflow/results/<task-id>.md` containing changed files, per-criterion results, test counts, evidence, deviations, unresolved issues, Reviewer focus, and Memory candidates.
-9. Build `Workflow/review-bundles/<task-id>/<attempt>/` when useful, then send the original task packet, bundle, actual diff, and Worker result to an independent Reviewer context. Require a structured report at `Workflow/reviews/<task-id>-r<N>.md`.
-10. On `PASS`, update `STATE.json`, let Main gate Memory candidates, and close the task. On `FAIL`, increment only the formal Reviewer failure count, notify Chief with an escalation packet, and follow the Decision Delta. On `BLOCKED`, or a Chief-directed replan, write a decision artifact in `Workflow/decisions/`.
+9. Build `Workflow/review-bundles/<task-id>/<attempt>/` when useful, then send the original task packet, bundle, actual diff, and Worker result to an independent Reviewer context. Prefer explicit `base-revision`/`review-revision` or a task-specific patch. Do not fall back to a dirty shared-worktree diff while another task is active; wait or create a stable boundary. Require a structured report at `Workflow/reviews/<task-id>-r<N>.md`.
+10. On `PASS`, update `STATE.json`, let Main gate Memory candidates, and close the task. On first `FAIL`, route Main → Chief; on second `FAIL`, route Main → Expert Worker by default unless explicit plan-level evidence requires Chief; after an Expert Worker `FAIL`, route Main → Chief. On `BLOCKED`, or a Chief-directed replan, write a decision artifact in `Workflow/decisions/`.
 
 If the harness cannot create subagents, simulate the same separation in distinct phases and still persist the task, result, and review artifacts.
 
-When dispatching, pass Worker and Reviewer their configured models and the configured `thinking_depth`; pass Chief its configured model and a planning or escalation prompt. Keep Main in the current main conversation. Treat a harness rejection as a configuration error; stop and ask whether to reconfigure instead of silently falling back to another model or depth.
+When dispatching, pass Worker and Reviewer their configured models and the configured `thinking_depth`; pass Chief its configured model and a planning or escalation prompt. Keep Main in the current main conversation. Worker, Reviewer, and Expert Worker return runtime issues to Main and never directly call Chief. Treat a harness rejection as a configuration error; stop and ask whether to reconfigure instead of silently falling back to another model or depth.
 
 ## Role contracts
 
@@ -191,7 +197,7 @@ Worker must:
 - add or update tests when the task requires behavior changes;
 - run targeted tests and report command, exit code, executed/passed/failed counts;
 - record changed files, evidence, deviations, unexpected repository state, unresolved questions, Reviewer focus, and Memory candidates;
-- stop and ask Chief when the task is ambiguous, under-scoped, or conflicts with project rules.
+- stop, return `BLOCKED` with evidence, and hand the issue to Main when the task is ambiguous, under-scoped, conflicts with project rules, or repository reality contradicts the packet. Main decides whether it can resolve the issue inside the accepted plan or must route it to Chief.
 
 Worker may edit implementation, tests, and task result files inside the assigned scope. Worker must not silently redefine requirements, modify the Chief’s plan, or self-certify a task as passed.
 
@@ -240,6 +246,8 @@ Keep policy and state separate:
 - `Workflow/config.json` is the runtime configuration: declared Main and persistent Chief models, Worker and Reviewer models, Worker concurrency limit, thinking depth, and configuration timestamp.
 - `MEMORY.md` is durable knowledge: project facts, confirmed decisions, important discoveries, known pitfalls, user constraints, durable risks, and approved Memory candidates.
 - `Workflow/STATE.json` is current operational state; `Workflow/events.jsonl` is the routine runtime log; `Workflow/` contains detailed packets and reports.
+
+Review Bundle files are read-only snapshots; this immutability does not freeze the underlying repository. If the task packet, Worker result, or evidence changes, create a new attempt. `scripts/build_review_bundle.py` emits `UNSTABLE_REVIEW_DIFF` and refuses a fallback bundle when another active Worker task could contaminate a shared dirty worktree.
 
 Read [references/file-contract.md](references/file-contract.md) when deciding what belongs in either file. Use [references/AGENTS.template.md](references/AGENTS.template.md) and [references/MEMORY.template.md](references/MEMORY.template.md) when adapting the contract manually.
 

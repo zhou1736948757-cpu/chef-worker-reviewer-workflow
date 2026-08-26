@@ -1,7 +1,7 @@
 <!-- chef-worker-reviewer-workflow:memory:start -->
 ## Durable project memory
 
-- Workflow version: `1.4`
+- Workflow version: `1.4` (v1.4.1 repair)
 - Project: `{{PROJECT_NAME}}`
 - Initialized at: `{{INITIALIZED_AT}}`
 - Artifact root: `Workflow/`

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from shutil import copyfile
 
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ACTIVE_TASK_STATUSES = {"EXECUTING", "REVIEWING", "REPAIRING", "ACTIVE"}
 
 
 def timestamp() -> str:
@@ -27,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attempt", default="1")
     parser.add_argument("--base-revision")
     parser.add_argument("--review-revision")
+    parser.add_argument("--task-patch", type=Path, help="Use a task-specific saved patch instead of reading the working tree")
     parser.add_argument("--tests-json", type=Path)
     return parser.parse_args()
 
@@ -85,6 +88,49 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def load_state(workflow: Path) -> dict:
+    state_path = workflow / "STATE.json"
+    if not state_path.is_file():
+        return {}
+    try:
+        value = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def active_other_tasks(workflow: Path, task_id: str) -> list[str]:
+    state = load_state(workflow)
+    active = {
+        task_key
+        for task_key, task in state.get("tasks", {}).items()
+        if task_key != task_id and isinstance(task, dict) and task.get("status") in ACTIVE_TASK_STATUSES
+    }
+    for job in state.get("active_agent_jobs", []):
+        if isinstance(job, dict) and job.get("task_id") != task_id and job.get("role") in {"Worker", "Expert Worker"}:
+            if job.get("task_id"):
+                active.add(str(job["task_id"]))
+    return sorted(active)
+
+
+def patch_changed_files(patch: str) -> list[str]:
+    changed = set()
+    for line in patch.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) >= 4:
+            for value in parts[2:4]:
+                changed.add(value[2:] if value.startswith(("a/", "b/")) else value)
+    return sorted(changed)
+
+
+def make_snapshot_read_only(paths: list[Path]) -> None:
+    for path in paths:
+        mode = path.stat().st_mode
+        path.chmod(mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+
+
 def main() -> int:
     args = parse_args()
     root = args.project_root.expanduser().resolve()
@@ -92,6 +138,10 @@ def main() -> int:
         raise SystemExit("task-id must contain only letters, digits, dot, underscore, or hyphen")
     if not re.fullmatch(r"[1-9][0-9]*", args.attempt):
         raise SystemExit("attempt must be a positive integer")
+    if bool(args.base_revision) != bool(args.review_revision):
+        raise SystemExit("--base-revision and --review-revision must be supplied together")
+    if args.task_patch and (args.base_revision or args.review_revision):
+        raise SystemExit("--task-patch cannot be combined with revision boundaries")
     workflow = root / "Workflow"
     task_path = workflow / "tasks" / f"{args.task_id}.md"
     result_path = workflow / "results" / f"{args.task_id}.md"
@@ -103,17 +153,50 @@ def main() -> int:
     bundle = workflow / "review-bundles" / args.task_id / args.attempt
     if bundle.exists():
         raise SystemExit(f"Review bundle already exists at {bundle}; use a new --attempt instead of overwriting it")
-    bundle.mkdir(parents=True, exist_ok=True)
     task_text = task_path.read_text(encoding="utf-8")
     expected = expected_scope(task_text)
-    name_output, name_code = run_git(root, "diff", "--name-only", *diff_args(args))
-    diff_output, diff_code = run_git(root, "diff", "--binary", *diff_args(args))
-    changed_files = sorted({line.strip() for line in name_output.splitlines() if line.strip()})
+    other_active_tasks = active_other_tasks(workflow, args.task_id)
+    status_output, status_code = run_git(root, "status", "--porcelain", "--untracked-files=all")
+    working_tree_dirty = bool(status_output.strip())
+
+    diff_source = "working_tree_fallback"
+    stability_signal = "WARNING"
+    stability_note = "Working-tree fallback is allowed only because no other active Worker task is recorded."
+    if args.task_patch:
+        if not args.task_patch.is_file():
+            raise SystemExit(f"Task-specific patch not found at {args.task_patch}")
+        diff_output = args.task_patch.read_text(encoding="utf-8")
+        changed_files = patch_changed_files(diff_output)
+        diff_code = 0
+        diff_source = "task_specific_patch"
+        stability_signal = "SAFE"
+        stability_note = "A task-specific saved patch is the review evidence boundary."
+    elif args.base_revision and args.review_revision:
+        name_output, name_code = run_git(root, "diff", "--name-only", args.base_revision, args.review_revision)
+        diff_output, diff_code = run_git(root, "diff", "--binary", args.base_revision, args.review_revision)
+        if name_code != 0 or diff_code != 0:
+            raise SystemExit("Stable revision boundary could not be read; do not build a review bundle from an unknown diff")
+        changed_files = sorted({line.strip() for line in name_output.splitlines() if line.strip()})
+        diff_source = "revision_boundary"
+        stability_signal = "SAFE"
+        stability_note = "The bundle uses the explicit base-revision to review-revision diff."
+    else:
+        diff_output, diff_code = run_git(root, "diff", "--binary")
+        name_output, name_code = run_git(root, "diff", "--name-only")
+        changed_files = sorted({line.strip() for line in name_output.splitlines() if line.strip()})
+        if other_active_tasks:
+            print(
+                "UNSTABLE_REVIEW_DIFF: shared dirty worktree has active other tasks "
+                f"{', '.join(other_active_tasks)}; provide revisions, a task-specific patch, or wait",
+            )
+            return 1
+        if status_code != 0 or name_code != 0 or diff_code != 0:
+            stability_note = "Git working-tree inspection was unavailable; Reviewer must inspect the actual diff."
+        elif not working_tree_dirty:
+            stability_note = "No working-tree changes were detected; Reviewer must verify the revision/evidence boundary."
+
     scope_violation = bool(expected) and any(not in_scope(path, expected) for path in changed_files)
-    if name_code != 0:
-        scope_signal = "WARNING"
-        scope_note = "Git changed-file inspection was unavailable; Reviewer must inspect the actual diff."
-    elif scope_violation:
+    if scope_violation:
         scope_signal = "BLOCKED"
         scope_note = "One or more changed files fall outside the expected write scope."
     elif not expected:
@@ -123,6 +206,7 @@ def main() -> int:
         scope_signal = "SAFE"
         scope_note = "Changed files are within the expected write scope."
 
+    bundle.mkdir(parents=True, exist_ok=True)
     (bundle / "task-packet.md").write_text(task_text, encoding="utf-8")
     copyfile(result_path, bundle / "worker-result.md")
     (bundle / "changed-files.txt").write_text("\n".join(changed_files) + ("\n" if changed_files else ""), encoding="utf-8")
@@ -156,12 +240,18 @@ def main() -> int:
         "created_at": timestamp(),
         "base_revision": args.base_revision,
         "review_revision": args.review_revision,
+        "diff_source": diff_source,
+        "stability_signal": stability_signal,
+        "stability_note": stability_note,
+        "active_other_tasks": other_active_tasks,
+        "working_tree_dirty": working_tree_dirty,
         "changed_files": changed_files,
         "expected_write_scope": expected,
         "scope_violation": scope_violation,
         "scope_signal": scope_signal,
         "source_hashes": source_hashes,
         "immutable": True,
+        "immutable_meaning": "Generated bundle files are read-only snapshots; the underlying repository may change.",
     }
     (bundle / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (bundle / "review-context.md").write_text(
@@ -169,11 +259,13 @@ def main() -> int:
         "Read `task-packet.md`, `worker-result.md`, `metadata.json`, `tests.json`, and `scope-check.json` first. "
         "This bundle is a high-quality starting context, not an information boundary: inspect any repository file, "
         "history, diff, or test needed to answer explicit review questions.\n\n"
+        f"Diff source: `{diff_source}`; stability: `{stability_signal}` — {stability_note}\n"
         f"Guardrail signal: `{scope_signal}` — {scope_note}\n",
         encoding="utf-8",
     )
+    make_snapshot_read_only([path for path in bundle.iterdir() if path.is_file()])
     print(f"built review bundle at {bundle}")
-    return 1 if scope_signal == "BLOCKED" else 0
+    return 1 if scope_signal == "BLOCKED" or stability_signal == "BLOCKED" else 0
 
 
 if __name__ == "__main__":
