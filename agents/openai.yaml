@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chief Worker Reviewer Workflow"
+  short_description: "Run bounded work with durable project records"
+  default_prompt: "Use $chef-worker-reviewer-workflow as an LLM Conductor: configure Main, persistent Chief, Worker, Reviewer, concurrency, and thinking depth on first use; let Chief perform Initial Global Planning, then let Main run bounded Worker/Reviewer execution with deterministic guardrails, Review Bundles, Expert Worker escalation, and durable/runtime-separated records."

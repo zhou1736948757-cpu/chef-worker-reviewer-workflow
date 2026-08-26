@@ -1,0 +1,132 @@
+# v1.4 Workflow file contract
+
+The workflow is an LLM Conductor with deterministic guardrails. Main owns runtime execution; Chief owns semantic planning and plan-level decisions.
+
+## Source of truth by concern
+
+| Artifact | Purpose | Primary owner | Update style |
+|---|---|---|---|
+| `AGENTS.md` | Stable rules and role boundaries | Chief plus maintainers | Managed block only |
+| `MEMORY.md` | Durable project knowledge and confirmed decisions | Main gates; Chief proposes | Concise, append-oriented |
+| `Workflow/config.json` | Declared role models, Worker ceiling, thinking depth | User/Chief | Explicit reconfiguration |
+| `Workflow/PLAN.md` | Semantic plan, requirements, decisions, invariants, dependencies | Chief | Plan-level updates only |
+| `Workflow/MAIN_BRIEF.md` | Short Chief → Main Runtime Handoff | Chief | Replace/update on plan delta |
+| `Workflow/STATE.json` | Current operational projection | Main/script | Small structured updates |
+| `Workflow/events.jsonl` | Append-only runtime facts | Main/script | One JSON object per line |
+
+`PLAN.md` records semantic dependencies, never runtime concurrency. `STATE.json` answers “where are we now?”; `MEMORY.md` answers “what remains valuable later?”; events answer “what happened during execution?”.
+
+## Initialization and compatibility
+
+Before writing root files, detect `AGENTS.md` and `MEMORY.md`: absent means create; a managed marker means preserve history and update only the managed block; an unmarked file requires explicit `merge`, explicit overwrite confirmation, or `cancel`. Never infer overwrite permission.
+
+`Workflow/` is the canonical visible directory. A legacy `.workflow/` is never silently duplicated. With explicit `--migrate-legacy`, copy it to `Workflow/`, preserve the old directory as backup, update managed path references, and create missing v1.4 artifacts. Existing v1.3 config, tasks, results, reviews, and history remain readable.
+
+The v1.4 config may contain `models.main`. Older configs without it are valid and mean `current-main-conversation`; do not pretend that a local declaration proves upstream routing. A v1.3 invocation with the original five runtime flags remains accepted.
+
+## PLAN.md
+
+`Workflow/PLAN.md` must contain:
+
+- Objective and explicit User Requirements;
+- Non-Goals;
+- concise Repository Understanding;
+- Proposed Approach;
+- Key Design Decisions;
+- Critical Invariants;
+- Global Acceptance Criteria;
+- Task Graph with semantic dependencies only;
+- Risks / Uncertainties;
+- Main Flexibility (adaptation allowed inside the plan);
+- Chief-Owned Decisions (changes that require Chief).
+
+Initial Global Planning is performed by Chief for a large initial prompt. Chief creates all currently reasonable initial task packets and high-value Memory candidates, then writes `MAIN_BRIEF.md`. Chief does not plan parallel waves or resource placement.
+
+## MAIN_BRIEF.md
+
+Keep this shorter than `PLAN.md`. Include Current Mission, Execution Starting Point (dependency-ready tasks only), Main Runtime Authority, Do Not Decide Without Chief, Reviewer/Worker failure policy, Important Invariants, Escalation Guidance, and the artifact map. Do not prescribe concurrency here.
+
+## STATE.json
+
+The initializer creates a small state object:
+
+```json
+{
+  "workflow": "chef-worker-reviewer-workflow",
+  "version": "1.4",
+  "workflow_status": "READY",
+  "tasks": {
+    "T-001": {
+      "status": "REVIEWING",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "latest_runtime_update": "<timestamp>"
+    }
+  },
+  "active_agent_jobs": [],
+  "blockers": [],
+  "latest_runtime_update": "<timestamp>"
+}
+```
+
+Only formal Reviewer `FAIL` increments `worker_failures`. Worker self-repair, tool errors, path errors, temporary timeouts, and intermediate test failures do not. Main may update state for runtime conditions; it must not change semantic task dependencies without Chief.
+
+## Runtime events
+
+`Workflow/events.jsonl` stores structured events such as `workflow_initialized`, `task_started`, `worker_dispatched`, `worker_completed`, `review_started`, `review_passed`, `review_failed`, `expert_worker_dispatched`, `repair_created`, `decision_recorded`, `state_changed`, `blocked`, and `task_closed`. Each event should include `event_id`, `event_type`, timestamp, task ID, role, concise action/result, evidence, and next action. Use a file lock or equivalent serialized append/update so concurrent events are not lost. Runtime events must not be appended to `MEMORY.md`.
+
+## Task packet
+
+Each `Workflow/tasks/<task-id>.md` contains Objective, Context, Dependencies, Scope, Out of Scope, Relevant Files / Areas, Expected / Allowed Write Scope, Implementation Guidance, Constraints, Acceptance Criteria, Required Verification, Reviewer Focus, Deliverables, and the Main concurrency decision: planned Worker/Reviewer counts, isolation boundaries, dependency assumptions, test isolation, and quality rationale. The last fields are runtime choices, not Chief’s semantic DAG.
+
+Relevant files are guidance, not an information boundary. Workers and Reviewers may inspect additional repository evidence.
+
+## Worker Result
+
+Each `Workflow/results/<task-id>.md` records Task ID, Status, Summary, Changed/Added/Deleted Files, per-criterion results, Tests Run (command, exit code, executed/passed/failed counts), Evidence, Deviations, Unexpected Repository State, Unresolved Issues, Reviewer Focus, and Memory Candidates. Repair attempts must remain traceable; do not silently erase an earlier result.
+
+`exit_code == 0` with `executed_tests == 0` is `INVALID_TEST_EXECUTION`, never a valid `PASS`.
+
+## Reviewer report
+
+Each `Workflow/reviews/<task-id>-r<N>.md` includes Verdict (`PASS`, `FAIL`, or `BLOCKED`), Findings, Evidence, Likely Root Cause, Recommended Solution, Affected Scope, Regression Risks, and Confidence. Findings use `BLOCKER`, `MAJOR`, `MINOR`, or `QUESTION`. A Reviewer recommendation is not repair authorization or architecture authority. After an Expert Worker, review returns to the same logical Reviewer/model policy; prior findings are supplied, but the new attempt is checked for regressions too.
+
+## Review Bundle
+
+`Workflow/review-bundles/<task-id>/<attempt>/` is bundle-first Reviewer context, not an information boundary. Each repair or changed evidence set gets a new attempt; do not overwrite an existing bundle. It should contain:
+
+- `metadata.json` — task, base/review revisions, changed files, expected scope, scope signal;
+- `task-packet.md` and `worker-result.md`;
+- `changed-files.txt` and `diff.patch`;
+- `tests.json`;
+- `scope-check.json`;
+- `review-context.md`.
+
+The bundle records actual evidence as a starting snapshot. If the task packet, result, or diff changes after bundling, create a new review attempt rather than treating the old bundle as current.
+
+## Decision artifact
+
+Important Chief decisions go in `Workflow/decisions/D-xxx.md` with Trigger, New Evidence, Decision (`REPAIR`, `REPLAN`, or `ASK_USER`), Reason, Plan Impact, Affected Tasks, Memory Delta, Task Changes, and required next state. A concise escalation packet is input to Chief, not an information boundary; Chief may inspect any needed files, history, tests, diffs, or artifacts.
+
+## Authority and concurrency
+
+Main owns runtime concurrency. Chief owns semantic dependency. Programs may emit `SAFE`, `WARNING`, or `BLOCKED` for dependency, expected-write-scope, shared-resource, and Reviewer-read-stability checks, but do not replace Main with an automatic scheduler. Main may choose serial execution even after `SAFE`. Shared files, parent/child paths, lockfiles, schema/migrations, generated outputs, package manifests, shared fixtures/services, ports, devices, destructive global state, or unstable review evidence default to serial or blocked.
+
+## Durable MEMORY
+
+`MEMORY.md` stores Project Facts, Confirmed Decisions, Important Discoveries, Known Pitfalls, User Constraints, Durable Risks, and approved Memory Candidates. Main is the Memory Gatekeeper. Worker and Reviewer propose candidates; Main merges only facts likely to remain valuable after the current task. Routine started/finished/PASS/FAIL/retry/timeout/status/tool events stay in `events.jsonl`, `STATE.json`, task artifacts, results, reviews, or decisions.
+
+## Ownership matrix
+
+| Artifact | Main | Chief | Worker | Reviewer |
+|---|---:|---:|---:|---:|
+| `PLAN.md` / `MAIN_BRIEF.md` | read/route | write/decide | read | read |
+| `STATE.json` / `events.jsonl` | maintain | read | report | report |
+| `MEMORY.md` | gate/merge | propose | propose | propose |
+| Task packet | create runtime tasks | create initial tasks | read | read |
+| Implementation | approve adaptation | no routine edits | write | read |
+| Review Bundle | build/route | read | provide evidence | read/verify |
+| Decision artifact | route | write | provide evidence | provide evidence |
+
+Never store secrets, access tokens, private keys, passwords, or sensitive personal data in these artifacts.
