@@ -33,6 +33,12 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 6. On FAIL #2, Main dispatches a fresh isolated Expert Worker directly unless the Reviewer explicitly provides plan-level evidence; Expert Worker returns to the same Reviewer policy, and its FAIL goes to Chief through Main.
 7. `PASS` closes a task only after acceptance criteria, evidence, state, and durable Memory candidates are handled. `BLOCKED` returns to Main/Chief as appropriate.
 
+### Subagent mode and repeated concurrency check
+
+- If the user chooses to use Subagents, Main sets `Workflow/STATE.json` `subagent_mode` to `ENABLED`; if the user declines, set `DISABLED`. An `UNSET` or absent value requires asking before dispatch.
+- While enabled, Main repeats a Worker-and-Reviewer concurrency check at the start of Initial Planning, every Worker wave, every Reviewer wave, every repair/recovery attempt, and final verification. Main records planned counts, isolation/evidence conditions, and the quality rationale in the task packet or a `concurrency_check` event.
+- The reminder is: “当前是否有多个依赖已满足、写入范围互不重叠且测试资源隔离的 Worker？当前是否有多个拥有独立稳定证据的 Reviewer？如果可以并发，按上限和质量门槛调度；如果不并发，记录具体原因。” Serial execution is valid only as a visible decision, not as an unexamined default.
+
 ### Same-session interruption recovery
 
 - Network/provider errors, rate limits, transient timeouts, and context or thinking-token limits are recoverable interruptions first. Preserve the original Subagent/session and send `继续` to that same session with the last checkpoint and remaining acceptance criteria.
@@ -67,6 +73,7 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 
 - Read `Workflow/config.json`, `Workflow/STATE.json`, and the relevant plan/brief before dispatch.
 - Use `Workflow/events.jsonl` for `task_started`, dispatch, completion, review, repair, interruption, continuation, and state events. `MEMORY.md` stores durable knowledge only; Worker/Reviewer submit Memory candidates and Main gates their merge.
+- When Subagents are enabled, repeat the concurrency check at every stage boundary; a previous serial decision does not carry forward automatically. Record a `concurrency_check` event or the equivalent task-packet decision before the next wave.
 - Start the visible Watchdog before dispatching roles; it checks every 600 seconds by default and reports stale heartbeat/runtime evidence to Main as a suspected network/provider/unresponsive-agent stall. Main decides the response; Watchdog never restarts agents, changes models, or bypasses Main.
 - `exit_code == 0` with `executed_tests == 0` is `INVALID_TEST_EXECUTION`, never a valid test `PASS`.
 - Reviewer `FAIL` reports must include Findings, Evidence, Likely Root Cause, Recommended Solution, Affected Scope, Regression Risks, and Confidence. A recommendation is not repair or architecture authorization.

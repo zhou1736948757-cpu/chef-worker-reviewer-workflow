@@ -391,6 +391,16 @@ def main() -> int:
         workflow_root / "PLAN.md": """# Workflow Plan\n\n## Objective\n\nPending Initial Chief Planning.\n\n## User Requirements\n\nPending Initial Chief Planning.\n\n## Non-Goals\n\nPending Initial Chief Planning.\n\n## Repository Understanding\n\nPending Initial Chief Planning.\n\n## Proposed Approach\n\nPending Initial Chief Planning.\n\n## Key Design Decisions\n\nPending Initial Chief Planning.\n\n## Critical Invariants\n\nPending Initial Chief Planning.\n\n## Global Acceptance Criteria\n\nPending Initial Chief Planning.\n\n## Task Graph\n\nPending Initial Chief Planning. Record semantic dependencies only; do not record runtime concurrency here.\n\n## Risks / Uncertainties\n\nPending Initial Chief Planning.\n\n## Main Flexibility\n\nPending Initial Chief Planning.\n\n## Chief-Owned Decisions\n\nPending Initial Chief Planning.\n""",
         workflow_root / "MAIN_BRIEF.md": """# Main Orchestrator Brief\n\n## Current Mission\n\nPending Initial Chief Planning.\n\n## Execution Starting Point\n\nPending Initial Chief Planning. List tasks whose dependencies are satisfied; do not prescribe concurrency here.\n\n## Runtime Authority\n\nMain owns runtime dispatch, concurrency, retries, evidence collection, state maintenance, and bounded adaptations inside the accepted plan.\n\n## Do Not Decide Without Chief\n\nPending Initial Chief Planning.\n\n## Reviewer Failure Policy\n\nA formal Reviewer `FAIL` is the only event that increments `worker_failures`.\n\n- FAIL #1 → Main sends an escalation packet to Chief for a Decision Delta.\n- FAIL #2 → Main dispatches an isolated Expert Worker by default.\n- If FAIL #2 contains explicit plan-level evidence, Main routes it to Chief instead.\n- If an Expert Worker is reviewed and receives `FAIL`, Main routes the result to Chief.\n\n## Worker Failure Policy\n\nWorker Failure means a formal Reviewer `FAIL`.\n\nOrdinary Worker test failures, shell errors, tool errors, timeouts, and self-repaired implementation mistakes do not increment `worker_failures`.\n\nAt `worker_failures >= 2`, prefer Expert Worker unless explicit evidence indicates that the accepted plan itself needs reinterpretation or change.\n\n## Important Invariants\n\nPending Initial Chief Planning.\n\n## Escalation Guidance\n\nPending Initial Chief Planning.\n\n## Relevant Artifact Map\n\nSee `PLAN.md`, `MEMORY.md`, `STATE.json`, `tasks/`, `results/`, `reviews/`, `review-bundles/`, `decisions/`, `events.jsonl`, `watchdog.json`, `heartbeats.json`, and `watchdog-alerts.jsonl` under `Workflow/`.\n""",
     }
+    main_brief_path = workflow_root / "MAIN_BRIEF.md"
+    initial_files[main_brief_path] = initial_files[main_brief_path].replace(
+        "## Runtime Authority\n\n",
+        "## Subagent Mode and Concurrency Reminder\n\n"
+        "Set `Workflow/STATE.json` `subagent_mode` to `ENABLED` or `DISABLED` after the user chooses whether to use Subagents. "
+        "If enabled, repeat the Worker-and-Reviewer concurrency check at the start of every stage, record planned counts and quality rationale, "
+        "and do not silently default to serial execution.\n\n"
+        "## Runtime Authority\n\n",
+        1,
+    )
     for path, content in initial_files.items():
         if path.exists():
             print(f"preserved existing {path}")
@@ -409,6 +419,7 @@ def main() -> int:
             "version": WORKFLOW_VERSION,
             "workflow_status": "READY",
             "tasks": {},
+            "subagent_mode": "UNSET",
             "active_agent_jobs": [],
             "blockers": [],
             "latest_runtime_update": initialized_at,

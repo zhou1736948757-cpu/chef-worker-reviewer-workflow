@@ -175,6 +175,16 @@ Default to serial execution when the codebase, dependencies, test isolation, or 
 
 Before dispatch, Main records at least: planned Worker concurrency, planned Reviewer concurrency, isolation boundaries, dependency assumptions, test-isolation plan, and the reason the choice is expected not to reduce quality. `scripts/validate_task_plan.py` may emit `SAFE`, `WARNING`, or `BLOCKED` for deterministic checks, but it never schedules agents. If a parallel result conflicts, loses evidence, creates a merge ambiguity, or exposes an untested interaction, Main stops further parallel dispatch and returns the affected work to a bounded serial phase.
 
+## Subagent mode and stage reminder (mandatory)
+
+When the user is asked whether to use Subagents and answers yes, Main must set `Workflow/STATE.json` `subagent_mode` to `ENABLED` before planning or dispatch. If the answer is no, set it to `DISABLED` and do not dispatch Subagents. If the field is `UNSET` or absent, ask before dispatching; never infer consent from a general request to complete the task.
+
+When `subagent_mode` is `ENABLED`, Main must repeat this concurrency check at the start of every stage: Initial Planning, each Worker wave, each Reviewer wave, every repair/recovery attempt, and final verification. The reminder is operationally mandatory so a long-running conversation does not silently fall back to serial work:
+
+> 并发检查：当前是否有多个依赖已满足、写入范围互不重叠且测试资源隔离的 Worker？当前是否有多个拥有独立稳定证据的 Reviewer？如果可以并发，按 `max_worker_concurrency` 和质量门槛调度；如果不并发，记录具体质量或依赖原因。
+
+For each stage, Main must explicitly decide and record planned Worker count, planned Reviewer count, isolation/evidence conditions, and the quality rationale in the task packet or a `concurrency_check` event. `max_worker_concurrency` limits Workers only; it does not silently limit independent Reviewers. A serial decision is valid, but it must be reasoned and visible. A later stage must perform the check again even if the previous stage was serial.
+
 ## Start a workflow
 
 1. Identify the project root. Prefer the repository root when `git rev-parse --show-toplevel` succeeds; otherwise use the requested project directory or current working directory.
@@ -204,7 +214,7 @@ Before dispatch, Main records at least: planned Worker concurrency, planned Revi
 5. Start the visible Watchdog before dispatching any role, using the command in the Watchdog section. Confirm that `Workflow/watchdog.json` exists and report that monitoring is active to Main.
 6. Emit the Main/Chief task-start reminder above, including configured-versus-observed model status.
 7. For a large initial prompt, wait for Chief to complete `PLAN.md`, `MAIN_BRIEF.md`, and initial task packets; for a bounded follow-up inside the accepted plan, Main may create a runtime task directly.
-8. Decide and record effective Worker and Reviewer concurrency using the quality gate above. Dispatch one Worker per bounded task; allow parallel Workers only when Main confirms the isolation and evidence conditions, and never exceed `max_worker_concurrency` from `Workflow/config.json`.
+8. At the start of every Worker or Reviewer wave, repeat the mandatory concurrency check above. Decide and record effective Worker and Reviewer concurrency using the quality gate. Dispatch one Worker per bounded task; allow parallel Workers only when Main confirms the isolation and evidence conditions, and never exceed `max_worker_concurrency` from `Workflow/config.json`. Do not forget to perform the check again for the Reviewer wave.
 9. Require the Worker to write a structured result at `Workflow/results/<task-id>.md` containing changed files, per-criterion results, test counts, evidence, deviations, unresolved issues, Reviewer focus, and Memory candidates.
 10. Build `Workflow/review-bundles/<task-id>/<attempt>/` when useful, then send the original task packet, bundle, actual diff, and Worker result to an independent Reviewer context. Prefer explicit `base-revision`/`review-revision` or a task-specific patch. Do not fall back to a dirty shared-worktree diff while another task is active; wait or create a stable boundary. Require a structured report at `Workflow/reviews/<task-id>-r<N>.md`.
 11. On `PASS`, update `STATE.json`, let Main gate Memory candidates, and close the task. On first `FAIL`, route Main → Chief; on second `FAIL`, route Main → Expert Worker by default unless explicit plan-level evidence requires Chief; after an Expert Worker `FAIL`, route Main → Chief. On `BLOCKED`, or a Chief-directed replan, write a decision artifact in `Workflow/decisions/`.

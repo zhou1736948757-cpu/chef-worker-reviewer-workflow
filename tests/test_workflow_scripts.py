@@ -87,6 +87,10 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertTrue((self.project / "Workflow" / "review-bundles").is_dir())
         self.assertFalse((self.project / ".workflow").exists())
         self.assertEqual(json.loads((self.project / "Workflow" / "config.json").read_text())["version"], "1.4")
+        state = json.loads((self.project / "Workflow" / "STATE.json").read_text())
+        self.assertEqual(state["subagent_mode"], "UNSET")
+        brief = (self.project / "Workflow" / "MAIN_BRIEF.md").read_text(encoding="utf-8")
+        self.assertIn("Subagent Mode and Concurrency Reminder", brief)
 
     def test_per_role_thinking_depths_are_persisted_and_rendered(self) -> None:
         self.initialize()

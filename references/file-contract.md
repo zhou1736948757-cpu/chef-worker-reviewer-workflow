@@ -69,6 +69,7 @@ The initializer creates a small state object:
       "latest_runtime_update": "<timestamp>"
     }
   },
+  "subagent_mode": "UNSET",
   "active_agent_jobs": [],
   "blockers": [],
   "latest_runtime_update": "<timestamp>"
@@ -77,11 +78,13 @@ The initializer creates a small state object:
 
 Only formal Reviewer `FAIL` increments `worker_failures`. FAIL #1 sets Chief escalation required. FAIL #2 routes to a fresh Expert Worker by default, unless explicit plan-level evidence requires Chief; Expert Worker FAIL routes to Chief through Main. Worker self-repair, tool errors, path errors, temporary timeouts, and intermediate test failures do not. Main may update state for runtime conditions; it must not change semantic task dependencies without Chief.
 
-`active_agent_jobs` is optional/reserved metadata and is not the authoritative source for liveness or completion. Task status, `latest_runtime_update`, `heartbeats.json`, and Watchdog alerts are the operational evidence.
+`subagent_mode` records the user's Subagent choice as `ENABLED`, `DISABLED`, or `UNSET`; Main must not dispatch while it is `UNSET`. `active_agent_jobs` is optional/reserved metadata and is not the authoritative source for liveness or completion. Task status, `latest_runtime_update`, `heartbeats.json`, and Watchdog alerts are the operational evidence.
+
+When `subagent_mode` is `ENABLED`, Main repeats a Worker-and-Reviewer concurrency check at every stage boundary and records the planned counts, isolation/evidence conditions, and quality rationale in the task packet or a `concurrency_check` event. The check is repeated even after a previous serial decision so long conversations do not silently forget safe parallelism.
 
 ## Runtime events
 
-`Workflow/events.jsonl` stores structured events such as `workflow_initialized`, `task_started`, `worker_dispatched`, `worker_completed`, `review_started`, `review_passed`, `review_failed`, `expert_worker_dispatched`, `subagent_interrupted`, `subagent_resume_requested`, `subagent_resumed`, `repair_created`, `decision_recorded`, `state_changed`, `blocked`, and `task_closed`. Each event should include `event_id`, `event_type`, timestamp, task ID, role, concise action/result, evidence, and next action; continuation events should include the session handle when available and the safe checkpoint. Use a file lock or equivalent serialized append/update so concurrent events are not lost. Runtime events must not be appended to `MEMORY.md`.
+`Workflow/events.jsonl` stores structured events such as `workflow_initialized`, `task_started`, `worker_dispatched`, `worker_completed`, `review_started`, `review_passed`, `review_failed`, `expert_worker_dispatched`, `subagent_interrupted`, `subagent_resume_requested`, `subagent_resumed`, `concurrency_check`, `repair_created`, `decision_recorded`, `state_changed`, `blocked`, and `task_closed`. Each event should include `event_id`, `event_type`, timestamp, task ID, role, concise action/result, evidence, and next action; continuation events should include the session handle when available and the safe checkpoint. Use a file lock or equivalent serialized append/update so concurrent events are not lost. Runtime events must not be appended to `MEMORY.md`.
 
 Transient network/provider errors, timeouts, rate limits, and context or thinking-token limits are recoverable interruptions. Main preserves the original Subagent/session and sends `继续` to that same session before considering any replacement. A replacement requires evidence that the session is unavailable/expired or that bounded continuation attempts failed; it does not inherit the original identity by assertion.
 

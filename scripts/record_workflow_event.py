@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         "worker_completed", "review_started", "review_completed", "review_passed",
         "review_failed", "expert_worker_dispatched", "repair_created", "decision_recorded",
         "subagent_interrupted", "subagent_resume_requested", "subagent_resumed",
-        "state_changed", "task_closed", "task_blocked", "blocked", "workflow_closed", "note",
+        "concurrency_check", "state_changed", "task_closed", "task_blocked", "blocked", "workflow_closed", "note",
     ))
     parser.add_argument("--evidence", default="none")
     parser.add_argument("--next-action", default="none")
@@ -140,6 +140,7 @@ def update_state(state_path: Path, args: argparse.Namespace, event_type: str, ev
             "version": "1.4",
             "workflow_status": "READY",
             "tasks": {},
+            "subagent_mode": "UNSET",
             "active_agent_jobs": [],
             "blockers": [],
         },
