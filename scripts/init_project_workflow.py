@@ -23,6 +23,14 @@ MEMORY_RUNTIME_END = "<!-- chef-worker-reviewer-workflow:runtime-config:end -->"
 
 THINKING_DEPTHS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 FILE_POLICIES = ("merge", "overwrite")
+MODEL_SELECTION_PLACEHOLDERS = frozenset({
+    "custom",
+    "custom model",
+    "other",
+    "自定义",
+    "自定义模型",
+    "其他",
+})
 VISIBLE_WORKFLOW_DIRNAME = "Workflow"
 LEGACY_WORKFLOW_DIRNAME = ".workflow"
 WORKFLOW_VERSION = "1.4"
@@ -51,6 +59,19 @@ def render(template: str, values: dict[str, str]) -> str:
     return rendered.strip() + "\n"
 
 
+def normalize_model_identifier(value: object, role: str) -> str:
+    """Require a concrete routing/model identifier, not a UI selection label."""
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"Workflow/config.json must contain a non-empty {role} model")
+    model = value.strip()
+    if model.casefold() in MODEL_SELECTION_PLACEHOLDERS:
+        raise SystemExit(
+            f"{role} model must be an exact model identifier; "
+            "'custom' is a selection branch, not a model ID"
+        )
+    return model
+
+
 def validate_runtime_config(config: dict) -> dict:
     if config.get("workflow") != "chef-worker-reviewer-workflow":
         raise SystemExit("Workflow/config.json has an unexpected workflow name")
@@ -59,15 +80,10 @@ def validate_runtime_config(config: dict) -> dict:
     if not isinstance(models, dict):
         raise SystemExit("Workflow/config.json must contain a models object")
     for role in ("chief", "worker", "reviewer"):
-        model = models.get(role)
-        if not isinstance(model, str) or not model.strip():
-            raise SystemExit(f"Workflow/config.json must contain a non-empty {role} model")
-        models[role] = model.strip()
+        models[role] = normalize_model_identifier(models.get(role), role)
     main_model = models.get("main")
     if main_model is not None:
-        if not isinstance(main_model, str) or not main_model.strip():
-            raise SystemExit("Workflow/config.json main model must be a non-empty string or null")
-        models["main"] = main_model.strip()
+        models["main"] = normalize_model_identifier(main_model, "main")
 
     concurrency = config.get("max_worker_concurrency")
     if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:

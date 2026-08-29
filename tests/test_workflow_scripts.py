@@ -116,6 +116,34 @@ class WorkflowScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Provide thinking depth for Main, Chief, Worker, and Reviewer together", result.stderr)
 
+    def test_custom_model_selector_label_is_rejected(self) -> None:
+        result = self.run_script(
+            "init_project_workflow.py",
+            "--project-root", str(self.project),
+            "--main-model", "current-main-conversation",
+            "--chief-model", "custom", "--worker-model", "worker-model", "--reviewer-model", "reviewer-model",
+            "--max-worker-concurrency", "1",
+            "--main-thinking-depth", "medium", "--chief-thinking-depth", "high",
+            "--worker-thinking-depth", "medium", "--reviewer-thinking-depth", "high",
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact model identifier", result.stderr)
+
+    def test_concrete_custom_provider_model_identifier_is_persisted(self) -> None:
+        self.run_script(
+            "init_project_workflow.py",
+            "--project-root", str(self.project),
+            "--main-model", "current-main-conversation",
+            "--chief-model", "my-provider/custom-chief-v1",
+            "--worker-model", "my-provider/worker-v1", "--reviewer-model", "my-provider/reviewer-v1",
+            "--max-worker-concurrency", "1",
+            "--main-thinking-depth", "medium", "--chief-thinking-depth", "high",
+            "--worker-thinking-depth", "medium", "--reviewer-thinking-depth", "high",
+        )
+        config = json.loads((self.project / "Workflow" / "config.json").read_text())
+        self.assertEqual(config["models"]["chief"], "my-provider/custom-chief-v1")
+
     def test_subagent_interruption_resumes_same_session_without_worker_failure(self) -> None:
         self.initialize()
         self.write_task()

@@ -27,7 +27,7 @@ Before writing root files, detect `AGENTS.md` and `MEMORY.md`: absent means crea
 
 The Watchdog checks every 600 seconds by default. It reports stale role heartbeats or active-task runtime updates as a suspected network/provider/unresponsive-agent stall; it does not assert the cause, restart agents, change models, or schedule repairs. Main owns the response. No hidden workflow directory is created.
 
-The v1.4 config may contain `models.main` and stores `thinking_depth` as four role keys: `main`, `chief`, `worker`, and `reviewer`. Older configs without `models.main` are valid and mean `current-main-conversation`; a legacy single depth is expanded to all four roles. Do not pretend that a local declaration proves upstream routing. A v1.3 invocation with the original five runtime flags remains accepted.
+The v1.4 config may contain `models.main` and stores `thinking_depth` as four role keys: `main`, `chief`, `worker`, and `reviewer`. Model values must be exact identifiers, not a selector label: choosing `Custom model`/`自定义模型` first requires a free-text identifier before configuration can continue. Older configs without `models.main` are valid and mean `current-main-conversation`; a legacy single depth is expanded to all four roles. Do not pretend that a local declaration proves upstream routing. A v1.3 invocation with the original five runtime flags remains accepted.
 
 ## PLAN.md
 

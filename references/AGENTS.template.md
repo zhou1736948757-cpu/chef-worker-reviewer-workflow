@@ -72,6 +72,7 @@ Use the rule: “Main owns adaptation inside an accepted plan. Chief owns interp
 ### Runtime and evidence rules
 
 - Read `Workflow/config.json`, `Workflow/STATE.json`, and the relevant plan/brief before dispatch.
+- A `Custom model`/`自定义模型` selector choice is incomplete until the user provides that role's exact model identifier. Never write a selector label (`custom`, `自定义模型`, `other`, and similar) to `Workflow/config.json`; retain any concrete provider/routing-qualified identifier as a declaration, not routing proof.
 - Use `Workflow/events.jsonl` for `task_started`, dispatch, completion, review, repair, interruption, continuation, and state events. `MEMORY.md` stores durable knowledge only; Worker/Reviewer submit Memory candidates and Main gates their merge.
 - When Subagents are enabled, repeat the concurrency check at every stage boundary; a previous serial decision does not carry forward automatically. Record a `concurrency_check` event or the equivalent task-packet decision before the next wave.
 - Start the visible Watchdog before dispatching roles; it checks every 600 seconds by default and reports stale heartbeat/runtime evidence to Main as a suspected network/provider/unresponsive-agent stall. Main decides the response; Watchdog never restarts agents, changes models, or bypasses Main.
